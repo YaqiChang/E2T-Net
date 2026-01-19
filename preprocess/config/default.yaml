@@ -1,0 +1,4 @@
+dataset: JAAD
+data_root: data
+mods:
+  - frames
