@@ -1,4 +1,17 @@
 dataset: JAAD
 data_root: data
+JAAD_root: /media/meta/File/datasets/Intention/JAAD_dataset
+JAAD_raw_root: /media/meta/File/datasets/Intention/JAAD_dataset/JAAD_clips/raw
+JAAD_preproc_root: /media/meta/File/datasets/Intention/JAAD_dataset/JAAD_clips/frames
+PIE_root: /media/meta/File/datasets/Intention/PIE_dataset
+PIE_raw_root: /media/meta/File/datasets/Intention/PIE_dataset/clips/raw
+PIE_preproc_root: /media/meta/File/datasets/Intention/PIE_dataset/clips/frames
+PIE_pose_root: /media/meta/File/datasets/Intention/PIE_dataset/PN_pose
+PIE_pose_npz: pie_pose_annotations.npz
+hrnet_checkpoint: simple-HRNet/pose_hrnet_w48_384x288.pth
+hrnet_c: 48
+hrnet_joints: 17
+hrnet_resolution: "384,288"
+hrnet_device: cuda
 mods:
   - frames

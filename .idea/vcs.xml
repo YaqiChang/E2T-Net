@@ -3,5 +3,7 @@
   <component name="VcsDirectoryMappings">
     <mapping directory="" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/RAFT" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/simple-HRNet" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/simple-HRNet/models_/detectors/yolo" vcs="Git" />
   </component>
 </project>

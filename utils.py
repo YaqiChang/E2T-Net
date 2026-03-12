@@ -249,14 +249,34 @@ def drawrect(drawcontext, bb, width=5):
     drawcontext.line(points, fill="red", width=width)
 
 def calculate_score(pred,target):
-   
-    TP = np.sum((pred == 1) & (target == 1))+ np.sum((pred == 0) & (target == 0))
-    FP = np.sum((pred == 1) & (target == 0)) + np.sum((pred == 0) & (target == 1))
-    FN = np.sum((pred == 0) & (target == 1)) + np.sum((pred == 0) & (target == 1))
+    metrics = binary_classification_metrics(pred, target)
+    return metrics['precision'], metrics['recall'], metrics['f1'], metrics['accuracy']
 
-    # Calculate precision, recall, and F1 score
-    precision = TP / (TP + FP)
-    recall = TP / (TP + FN)
-    f1 = 2 * (precision * recall) / (precision + recall)
-    accuracy= TP/len(target)
-    return precision,recall,f1,accuracy
+
+def binary_classification_metrics(pred, target):
+    pred = np.asarray(pred).reshape(-1).astype(np.int64)
+    target = np.asarray(target).reshape(-1).astype(np.int64)
+
+    if pred.shape != target.shape:
+        raise ValueError(f"Shape mismatch: pred{pred.shape} vs target{target.shape}")
+
+    tp = int(np.sum((pred == 1) & (target == 1)))
+    fp = int(np.sum((pred == 1) & (target == 0)))
+    fn = int(np.sum((pred == 0) & (target == 1)))
+    tn = int(np.sum((pred == 0) & (target == 0)))
+
+    precision = tp / (tp + fp) if (tp + fp) else 0.0
+    recall = tp / (tp + fn) if (tp + fn) else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
+    accuracy = (tp + tn) / target.size if target.size else 0.0
+
+    return {
+        'precision': precision,
+        'recall': recall,
+        'f1': f1,
+        'accuracy': accuracy,
+        'tp': tp,
+        'fp': fp,
+        'fn': fn,
+        'tn': tn,
+    }

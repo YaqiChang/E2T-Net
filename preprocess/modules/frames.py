@@ -3,10 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict
 
-from preprocess.core.io import copy_images, ensure_paths_exist
-from preprocess.core.manifest import Manifest
-from preprocess.core.registry import PreprocessModule
-from preprocess.core.utils import ensure_dir
+from ..core.io import copy_images, ensure_paths_exist
+from ..core.registry import PreprocessModule
 
 
 class FramesModule(PreprocessModule):

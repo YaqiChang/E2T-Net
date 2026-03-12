@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from preprocess.core.registry import PreprocessModule
+from ..core.registry import PreprocessModule
 
 
 class FlowRaftModule(PreprocessModule):

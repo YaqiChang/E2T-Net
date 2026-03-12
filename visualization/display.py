@@ -119,7 +119,8 @@ def draw_ped_attribute(cv2_img,labels,offset,thickness):
     return image
 
 def draw_bar_plots(image,cross_future,cross_pred,bbox):
-    ped_c=np.argmax(cross_pred.view(-1,2).detach().cpu().numpy(), axis=1)
+    probs = torch.softmax(cross_pred, dim=-1)
+    ped_c = torch.argmax(probs.view(-1, 2), dim=1).detach().cpu().numpy()
     # Count instances for each category
     gt_crossing_count = np.sum(np.array(cross_future[:, 0]))
     gt_non_crossing_count = np.sum(np.array(cross_future[:, 1]))

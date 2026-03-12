@@ -85,11 +85,10 @@ class PTINet(nn.Module):
         self.attrib_decoder = nn.LSTMCell(input_size=self.size, hidden_size=args.hidden_size)
         
         self.fc_speed    = nn.Linear(in_features=args.hidden_size, out_features=self.size)
-        self.fc_crossing = nn.Sequential(nn.Linear(in_features=args.hidden_size, out_features=2), nn.ReLU())
+        self.fc_crossing = nn.Linear(in_features=args.hidden_size, out_features=2)
         self.fc_attrib = nn.Sequential(nn.Linear(in_features=args.hidden_size, out_features=3), nn.ReLU())
         
         self.hardtanh = nn.Hardtanh(min_val=-1*args.hardtanh_limit, max_val=args.hardtanh_limit)
-        self.softmax = nn.Softmax(dim=1)
         
         self.args = args
         
@@ -254,7 +253,6 @@ class PTINet(nn.Module):
             hdc, zdc         = self.crossing_decoder(in_cr, (hdc, zdc))
             crossing_output  = self.fc_crossing(hdc)
             in_cr            = self.pos_embedding(hdc).detach()
-            crossing_output  = self.softmax(crossing_output)
             crossing_outputs = torch.cat((crossing_outputs, crossing_output.unsqueeze(1)), dim = 1)
 
         outputs.append(crossing_outputs)
