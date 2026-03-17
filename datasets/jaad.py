@@ -20,6 +20,27 @@ except ImportError:
 
 
 class JAAD(torch.utils.data.Dataset):
+    def _load_cached_sequences(self, cache_path):
+        sequence_centric = pd.read_csv(cache_path)
+        df = sequence_centric.copy()
+        for v in list(df.columns.values):
+            print(v + ' loaded')
+            try:
+                df.loc[:, v] = df.loc[:, v].apply(lambda x: literal_eval(x))
+            except:
+                continue
+        sequence_centric[df.columns] = df[df.columns]
+        return sequence_centric
+
+    def _resolve_id_column(self, df):
+        for candidate in ['ID', 'ped_id', 'track_id', 'person_id', 'obj_track_id']:
+            if candidate in df.columns:
+                return candidate
+        raise KeyError(
+            'No supported identity column found in JAAD csv. '
+            'Expected one of: ID, ped_id, track_id, person_id, obj_track_id'
+        )
+
     def _progress_iter(self, iterable, desc, total=None):
         if tqdm is not None:
             return tqdm(iterable, desc=desc, total=total, leave=False)
@@ -90,38 +111,46 @@ class JAAD(torch.utils.data.Dataset):
         self.max_threads = 16
 
         self.filename = 'jaad_{}_{}_{}_{}.csv'.format(dtype, str(input), str(output), str(stride))
+        cache_path = os.path.join(self.out_dir, self.filename)
 
-        if(from_file):
-            sequence_centric = pd.read_csv(os.path.join(self.out_dir, self.filename))
-            df = sequence_centric.copy()
-            for v in list(df.columns.values):
-                print(v + ' loaded')
-                try:
-                    df.loc[:, v] = df.loc[:, v].apply(lambda x: literal_eval(x))
-                except:
-                    continue
-            sequence_centric[df.columns] = df[df.columns]
+        if from_file:
+            if os.path.exists(cache_path):
+                print(f'Loading cached sequence file: {cache_path}')
+            else:
+                raise FileNotFoundError(f'Cached JAAD sequence file not found: {cache_path}')
+            sequence_centric = self._load_cached_sequences(cache_path)
 
         else:
             print('Reading data files ...')
             df = pd.DataFrame()
             new_index = 0
             files = sorted(glob.glob(os.path.join(data_dir, dtype, "*")))
+            if not files:
+                raise FileNotFoundError(
+                    f'No JAAD csv files found under {os.path.join(data_dir, dtype)}. '
+                    f'If you already built cached sequences, set out_dir to the folder containing {self.filename}.'
+                )
             for file in self._progress_iter(files, desc='Reading CSVs', total=len(files)):
                 temp = pd.read_csv(file)
                 if not temp.empty:
+                    id_col = self._resolve_id_column(temp)
                     temp['file'] = [file for t in range(temp.shape[0])]
 
-                    for index in temp.ID.unique():
+                    for index in temp[id_col].unique():
                         new_index += 1
-                        temp.ID = temp.ID.replace(index, new_index)
+                        temp[id_col] = temp[id_col].replace(index, new_index)
 
-                    temp = temp.sort_values(['ID', 'frame'], axis=0)
+                    temp = temp.sort_values([id_col, 'frame'], axis=0)
+                    if id_col != 'ID':
+                        temp['ID'] = temp[id_col]
 
                     df = pd.concat((df, temp), ignore_index=True)
 
             print('Processing data ...')
-            df.insert(0, 'sequence', df.ID)
+            id_col = self._resolve_id_column(df)
+            if id_col != 'ID':
+                df['ID'] = df[id_col]
+            df.insert(0, 'sequence', df['ID'])
 
             df = self._compute_centers_with_progress(df)
 
@@ -193,7 +222,6 @@ class JAAD(torch.utils.data.Dataset):
             data = ped_dt.join(data)
             data = dt.join(data)
 
-            data = data.drop(data[data.crossing_obs.apply(lambda x: 1. in x)].index)
             data['label'] = data.crossing_true.apply(lambda x: 1. if 1. in x else 0.)
 
             if save:

@@ -87,6 +87,7 @@ class PTINet(nn.Module):
         self.fc_speed    = nn.Linear(in_features=args.hidden_size, out_features=self.size)
         self.fc_crossing = nn.Linear(in_features=args.hidden_size, out_features=2)
         self.fc_attrib = nn.Sequential(nn.Linear(in_features=args.hidden_size, out_features=3), nn.ReLU())
+        self.fc_intention = nn.Linear(in_features=args.hidden_size, out_features=2)
         
         self.hardtanh = nn.Hardtanh(min_val=-1*args.hardtanh_limit, max_val=args.hardtanh_limit)
         
@@ -249,17 +250,23 @@ class PTINet(nn.Module):
             hdc=hdc + himg_op
             zdc=zdc + cimg_op 
 
+        crossing_hidden_states = []
+
         for i in range(self.args.output//self.args.skip):
             hdc, zdc         = self.crossing_decoder(in_cr, (hdc, zdc))
+            crossing_hidden_states.append(hdc.unsqueeze(1))
             crossing_output  = self.fc_crossing(hdc)
             in_cr            = self.pos_embedding(hdc).detach()
             crossing_outputs = torch.cat((crossing_outputs, crossing_output.unsqueeze(1)), dim = 1)
 
+        intention_context = torch.cat(crossing_hidden_states, dim=1).max(dim=1)[0]
+        intention_logits = self.fc_intention(intention_context)
+
         outputs.append(crossing_outputs)
+        outputs.append(intention_logits)
     
         if average:
-            crossing_labels = torch.argmax(crossing_outputs, dim=2)
-            intention = torch.max(crossing_labels,dim=1)[0]
+            intention = torch.argmax(intention_logits, dim=1)
             outputs.append(intention)
         
 

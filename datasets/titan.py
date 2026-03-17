@@ -150,7 +150,6 @@ class TITAN(torch.utils.data.Dataset):
             # data=ped_dt.join(data)
             data = dt.join(data)
             
-            data = data.drop(data[data.crossing_obs.apply(lambda x: 1. in x)].index) ### remove cases in which the pedestrian is already on the road, and there is no chnage from crossing to non_crossing.
             data['label'] = data.crossing_true.apply(lambda x: 1. if 1. in x else 0.)
             
             if save:

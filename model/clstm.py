@@ -50,16 +50,20 @@ class ConvLSTMCell(nn.Module):
         return ch, cc
 
     def init_hidden(self, batch_size, hidden, shape):
-        if self.Wci is None:
-            self.Wci = Variable(torch.zeros(1, hidden, shape[0]//self.conv_stride, shape[1]//self.conv_stride)).to(torch.device('cuda'))
-            self.Wcf = Variable(torch.zeros(1, hidden, shape[0]//self.conv_stride, shape[1]//self.conv_stride)).to(torch.device('cuda'))
-            self.Wco = Variable(torch.zeros(1, hidden, shape[0]//self.conv_stride, shape[1]//self.conv_stride)).to(torch.device('cuda'))
+        device = self.Wxi.weight.device
+        spatial_shape = (shape[0] // self.conv_stride, shape[1] // self.conv_stride)
+        if self.Wci is None or self.Wci.device != device:
+            self.Wci = Variable(torch.zeros(1, hidden, spatial_shape[0], spatial_shape[1], device=device))
+            self.Wcf = Variable(torch.zeros(1, hidden, spatial_shape[0], spatial_shape[1], device=device))
+            self.Wco = Variable(torch.zeros(1, hidden, spatial_shape[0], spatial_shape[1], device=device))
         else:
             assert shape[0]//self.conv_stride == self.Wci.size()[2], 'Input Height Mismatched! %d vs %d' %(shape[0]//self.conv_stride, self.Wci.size()[2])
             assert shape[1]//self.conv_stride == self.Wci.size()[3], 'Input Width Mismatched!'
         #print("returning init h of size ", batch_size, hidden, shape[0], shape[1])cd
-        return (Variable(torch.zeros(batch_size, hidden, shape[0]//self.conv_stride, shape[1]//self.conv_stride)).to(torch.device('cuda')),
-                Variable(torch.zeros(batch_size, hidden, shape[0]//self.conv_stride, shape[1]//self.conv_stride)).to(torch.device('cuda')))
+        return (
+            Variable(torch.zeros(batch_size, hidden, spatial_shape[0], spatial_shape[1], device=device)),
+            Variable(torch.zeros(batch_size, hidden, spatial_shape[0], spatial_shape[1], device=device)),
+        )
 
 
 class ConvLSTM(nn.Module):

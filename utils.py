@@ -37,6 +37,7 @@ def FDE(pred, true, is_3D=False):
 
 
 def AIOU(pred, true, is_3D=False):
+    device = pred.device
     if not is_3D:
         min_pred = pred[:,:,:2]-pred[:,:,2:]/2
         max_pred = pred[:,:,:2]+pred[:,:,2:]/2
@@ -46,8 +47,8 @@ def AIOU(pred, true, is_3D=False):
         min_inter = torch.max(min_pred, min_true)
         max_inter = torch.min(max_pred, max_true)
 
-        interArea = torch.max(torch.zeros(min_inter.shape[0],min_inter.shape[1]).to('cuda'), (max_inter[:,:,0]-min_inter[:,:,0])) *\
-                    torch.max(torch.zeros(max_inter.shape[0],max_inter.shape[1]).to('cuda'), (max_inter[:,:,1]-min_inter[:,:,1]))
+        interArea = torch.max(torch.zeros(min_inter.shape[0], min_inter.shape[1], device=device), (max_inter[:,:,0]-min_inter[:,:,0])) *\
+                    torch.max(torch.zeros(max_inter.shape[0], max_inter.shape[1], device=device), (max_inter[:,:,1]-min_inter[:,:,1]))
 
         pred_a = pred[:,:,2] * pred[:,:,3]
         true_a = true[:,:,2] * true[:,:,3]
@@ -62,9 +63,9 @@ def AIOU(pred, true, is_3D=False):
         min_inter = torch.max(min_pred, min_true)
         max_inter = torch.min(max_pred, max_true)
 
-        interArea = torch.max(torch.zeros(min_inter.shape[0],min_inter.shape[1]).to('cuda'), (max_inter[:,:,0]-min_inter[:,:,0])) *\
-                    torch.max(torch.zeros(max_inter.shape[0],max_inter.shape[1]).to('cuda'), (max_inter[:,:,1]-min_inter[:,:,1])) *\
-                    torch.max(torch.zeros(max_inter.shape[0],max_inter.shape[1]).to('cuda'), (max_inter[:,:,2]-min_inter[:,:,2]))
+        interArea = torch.max(torch.zeros(min_inter.shape[0], min_inter.shape[1], device=device), (max_inter[:,:,0]-min_inter[:,:,0])) *\
+                    torch.max(torch.zeros(max_inter.shape[0], max_inter.shape[1], device=device), (max_inter[:,:,1]-min_inter[:,:,1])) *\
+                    torch.max(torch.zeros(max_inter.shape[0], max_inter.shape[1], device=device), (max_inter[:,:,2]-min_inter[:,:,2]))
 
         pred_a = pred[:,:,3] * pred[:,:,4] * pred[:,:,5]
         true_a = true[:,:,3] * true[:,:,4] * true[:,:,5]
@@ -75,6 +76,7 @@ def AIOU(pred, true, is_3D=False):
 
 
 def FIOU(pred, true, is_3D=False):
+    device = pred.device
     if not is_3D:
         min_pred = pred[:,-1,:2]-pred[:,-1,2:]/2
         max_pred = pred[:,-1,:2]+pred[:,-1,2:]/2
@@ -84,8 +86,8 @@ def FIOU(pred, true, is_3D=False):
         min_inter = torch.max(min_pred, min_true)
         max_inter = torch.min(max_pred, max_true)
 
-        interArea = torch.max(torch.zeros(min_inter.shape[0]).to('cuda'), (max_inter[:,0]-min_inter[:,0])) * \
-                    torch.max(torch.zeros(max_inter.shape[0]).to('cuda'), (max_inter[:,1]-min_inter[:,1]))
+        interArea = torch.max(torch.zeros(min_inter.shape[0], device=device), (max_inter[:,0]-min_inter[:,0])) * \
+                    torch.max(torch.zeros(max_inter.shape[0], device=device), (max_inter[:,1]-min_inter[:,1]))
 
         pred_a = pred[:,-1,2] * pred[:,-1,3]
         true_a = true[:,-1,2] * true[:,-1,3]
@@ -101,9 +103,9 @@ def FIOU(pred, true, is_3D=False):
         min_inter = torch.max(min_pred, min_true)
         max_inter = torch.min(max_pred, max_true)
 
-        interArea = torch.max(torch.zeros(min_inter.shape[0]).to('cuda'), (max_inter[:,0]-min_inter[:,0])) * \
-                    torch.max(torch.zeros(max_inter.shape[0]).to('cuda'), (max_inter[:,1]-min_inter[:,1])) * \
-                    torch.max(torch.zeros(max_inter.shape[0]).to('cuda'), (max_inter[:,2]-min_inter[:,2]))
+        interArea = torch.max(torch.zeros(min_inter.shape[0], device=device), (max_inter[:,0]-min_inter[:,0])) * \
+                    torch.max(torch.zeros(max_inter.shape[0], device=device), (max_inter[:,1]-min_inter[:,1])) * \
+                    torch.max(torch.zeros(max_inter.shape[0], device=device), (max_inter[:,2]-min_inter[:,2]))
 
         pred_a = pred[:,-1,3] * pred[:,-1,4] * pred[:,-1,5]
         true_a = true[:,-1,3] * true[:,-1,4] * true[:,-1,5]
@@ -127,28 +129,29 @@ def compute_center(row, is_3D=False):
 
 
 def speed2pos(preds, obs_p, is_3D=False):
+    device = preds.device
     if not is_3D:
-        pred_pos = torch.zeros(preds.shape[0], preds.shape[1], 4).to('cuda')
+        pred_pos = torch.zeros(preds.shape[0], preds.shape[1], 4, device=device)
         current = obs_p[:,-1,:]
         for i in range(preds.shape[1]):
             pred_pos[:,i,:] = current + preds[:,i,:]
             current = pred_pos[:,i,:]
             
-        pred_pos[:,:,0] = torch.min(pred_pos[:,:,0], 2704*torch.ones(pred_pos.shape[0], pred_pos.shape[1], device='cuda'))
-        pred_pos[:,:,1] = torch.min(pred_pos[:,:,1], 1520*torch.ones(pred_pos.shape[0], pred_pos.shape[1], device='cuda'))
-        pred_pos[:,:,0] = torch.max(pred_pos[:,:,0], torch.zeros(pred_pos.shape[0], pred_pos.shape[1], device='cuda'))
-        pred_pos[:,:,1] = torch.max(pred_pos[:,:,1], torch.zeros(pred_pos.shape[0], pred_pos.shape[1], device='cuda'))
+        pred_pos[:,:,0] = torch.min(pred_pos[:,:,0], 2704 * torch.ones(pred_pos.shape[0], pred_pos.shape[1], device=device))
+        pred_pos[:,:,1] = torch.min(pred_pos[:,:,1], 1520 * torch.ones(pred_pos.shape[0], pred_pos.shape[1], device=device))
+        pred_pos[:,:,0] = torch.max(pred_pos[:,:,0], torch.zeros(pred_pos.shape[0], pred_pos.shape[1], device=device))
+        pred_pos[:,:,1] = torch.max(pred_pos[:,:,1], torch.zeros(pred_pos.shape[0], pred_pos.shape[1], device=device))
     else:
-        pred_pos = torch.zeros(preds.shape[0], preds.shape[1], 6).to('cuda')
+        pred_pos = torch.zeros(preds.shape[0], preds.shape[1], 6, device=device)
         current = obs_p[:,-1,:]
         for i in range(preds.shape[1]):
             pred_pos[:,i,:] = current + preds[:,i,:]
             current = pred_pos[:,i,:]
             
-        pred_pos[:,:,0] = torch.min(pred_pos[:,:,0], 100*torch.ones(pred_pos.shape[0], pred_pos.shape[1], device='cuda'))
-        pred_pos[:,:,1] = torch.min(pred_pos[:,:,1], 100*torch.ones(pred_pos.shape[0], pred_pos.shape[1], device='cuda'))
-        pred_pos[:,:,0] = torch.max(pred_pos[:,:,0], -100*torch.ones(pred_pos.shape[0], pred_pos.shape[1], device='cuda'))
-        pred_pos[:,:,1] = torch.max(pred_pos[:,:,1], -100*torch.ones(pred_pos.shape[0], pred_pos.shape[1], device='cuda'))
+        pred_pos[:,:,0] = torch.min(pred_pos[:,:,0], 100 * torch.ones(pred_pos.shape[0], pred_pos.shape[1], device=device))
+        pred_pos[:,:,1] = torch.min(pred_pos[:,:,1], 100 * torch.ones(pred_pos.shape[0], pred_pos.shape[1], device=device))
+        pred_pos[:,:,0] = torch.max(pred_pos[:,:,0], -100 * torch.ones(pred_pos.shape[0], pred_pos.shape[1], device=device))
+        pred_pos[:,:,1] = torch.max(pred_pos[:,:,1], -100 * torch.ones(pred_pos.shape[0], pred_pos.shape[1], device=device))
             
     return pred_pos
 
@@ -268,15 +271,66 @@ def binary_classification_metrics(pred, target):
     precision = tp / (tp + fp) if (tp + fp) else 0.0
     recall = tp / (tp + fn) if (tp + fn) else 0.0
     f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
+    beta_sq = 0.5 ** 2
+    f0_5 = ((1 + beta_sq) * precision * recall / (beta_sq * precision + recall)) if (precision + recall) else 0.0
     accuracy = (tp + tn) / target.size if target.size else 0.0
+    specificity = tn / (tn + fp) if (tn + fp) else 0.0
+    balanced_accuracy = 0.5 * (recall + specificity)
 
     return {
         'precision': precision,
         'recall': recall,
         'f1': f1,
+        'f0_5': f0_5,
         'accuracy': accuracy,
+        'specificity': specificity,
+        'balanced_accuracy': balanced_accuracy,
         'tp': tp,
         'fp': fp,
         'fn': fn,
         'tn': tn,
     }
+
+
+def find_best_binary_threshold(prob, target, metric='f1', thresholds=None):
+    prob = np.asarray(prob, dtype=np.float32).reshape(-1)
+    target = np.asarray(target).reshape(-1).astype(np.int64)
+
+    if prob.shape != target.shape:
+        raise ValueError(f"Shape mismatch: prob{prob.shape} vs target{target.shape}")
+
+    if thresholds is None:
+        thresholds = np.linspace(0.05, 0.95, 19)
+
+    best_threshold = 0.5
+    best_metrics = None
+    best_score = None
+    metric_aliases = {
+        'f1': 'f1',
+        'f0.5': 'f0_5',
+        'f0_5': 'f0_5',
+        'balanced_accuracy': 'balanced_accuracy',
+        'precision': 'precision',
+        'recall': 'recall',
+        'specificity': 'specificity',
+    }
+    metric_name = metric_aliases.get(metric, 'f1')
+
+    for threshold in thresholds:
+        pred = (prob >= threshold).astype(np.int64)
+        metrics = binary_classification_metrics(pred, target)
+        score = metrics[metric_name]
+        tie_break = metrics['f0_5'] + metrics['f1'] + metrics['balanced_accuracy'] + metrics['precision']
+        if best_metrics is None or score > best_score or (
+            score == best_score and tie_break > (
+                best_metrics['f0_5'] + best_metrics['f1'] + best_metrics['balanced_accuracy'] + best_metrics['precision']
+            )
+        ):
+            best_threshold = float(threshold)
+            best_metrics = metrics
+            best_score = score
+
+    best_metrics = dict(best_metrics)
+    best_metrics['threshold'] = best_threshold
+    best_metrics['score_metric'] = metric_name
+    return best_threshold, best_metrics

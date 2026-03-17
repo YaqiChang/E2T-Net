@@ -19,7 +19,9 @@ class Encoder(nn.Module):
 
     def forward(self, x):
         # x: tensor of shape (batch_size, seq_length, hidden_size)
-        outputs, (hidden, cell) = self.lstm(x)
+        # cuDNN RNN init can fail on some local CUDA setups; fall back to the native kernel.
+        with torch.backends.cudnn.flags(enabled=False):
+            outputs, (hidden, cell) = self.lstm(x)
         return (hidden, cell)
 
 
@@ -42,7 +44,8 @@ class Decoder(nn.Module):
 
     def forward(self, x, hidden):
         # x: tensor of shape (batch_size, seq_length, hidden_size)
-        output, (hidden, cell) = self.lstm(x, hidden)
+        with torch.backends.cudnn.flags(enabled=False):
+            output, (hidden, cell) = self.lstm(x, hidden)
         prediction = self.fc(output)
         return prediction, (hidden, cell)
 

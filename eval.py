@@ -1,3 +1,4 @@
+# add on 17 Mar 2024 by CYQ
 import time
 import os
 import argparse
@@ -5,19 +6,12 @@ import sys
 
 import torch
 import torch.nn as nn
-# import torch.nn.functional as F
-# import torch.optim as optim
-
-# import torchvision
-# import torchvision.transforms as transforms
-    
 import numpy as np
 
-# import DataLoader
 import datasets
 import model.network_image as network
 import utils
-from utils import data_loader, binary_classification_metrics
+from utils import binary_classification_metrics
 import torch.distributed as dist
 from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel
@@ -29,38 +23,35 @@ except ImportError:
     tqdm = None
 
 
-# Arguments
 def parse_args():
-    parser = argparse.ArgumentParser(description='Train PV-LSTM network')
-    
+    parser = argparse.ArgumentParser(description='Evaluate PTINet network')
+
     parser.add_argument('--data_dir', type=str,
-                        default= '/scratch/project_2007864/PIE/PN/',
+                        default='/scratch/project_2007864/PIE/PN/',
                         required=False)
-    parser.add_argument('--dataset', type=str, 
+    parser.add_argument('--dataset', type=str,
                         default='pie',
                         required=False)
-    parser.add_argument('--out_dir', type=str, 
-                        default= '/projappl/project_2007864/PIE_lstm_vae_clstm/bounding-box-prediction/output_32/',
-                        required=False)  
-    parser.add_argument('--task', type=str, 
+    parser.add_argument('--out_dir', type=str,
+                        default='/projappl/project_2007864/PIE_lstm_vae_clstm/bounding-box-prediction/output_32/',
+                        required=False)
+    parser.add_argument('--task', type=str,
                         default='2D_bounding_box-intention',
                         required=False)
-    
-    # data configuration
+
     parser.add_argument('--input', type=int,
                         default=16,
                         required=False)
-    parser.add_argument('--output', type=int, 
+    parser.add_argument('--output', type=int,
                         default=48,
                         required=False)
-    parser.add_argument('--stride', type=int, 
+    parser.add_argument('--stride', type=int,
                         default=16,
-                        required=False)  
-    parser.add_argument('--skip', type=int, default=1)  
-    parser.add_argument('--is_3D', type=bool, default=False) 
-    # data loading / saving           
-    parser.add_argument('--dtype', type=str, default='val')
-    parser.add_argument("--from_file", type=bool, default=False)       
+                        required=False)
+    parser.add_argument('--skip', type=int, default=1)
+    parser.add_argument('--is_3D', type=bool, default=False)
+    parser.add_argument('--dtype', type=str, default='test')
+    parser.add_argument('--from_file', type=bool, default=False)
     parser.add_argument('--save', type=bool, default=True)
     parser.add_argument('--log_name', type=str, default='')
     parser.add_argument('--checkpoint', type=str, default='',
@@ -70,18 +61,16 @@ def parse_args():
     parser.add_argument('--pin_memory', type=bool, default=False)
     parser.add_argument('--prefetch_factor', type=int, default=3)
 
-    # training
     parser.add_argument('--device', type=str, default='cuda')
     parser.add_argument('--batch_size', type=int, default=1)
     parser.add_argument('--n_epochs', type=int, default=200)
-    parser.add_argument('--lr', type=int, default= 0.001)
+    parser.add_argument('--lr', type=int, default=0.001)
     parser.add_argument('--lr_scheduler', type=bool, default=False)
     parser.add_argument('--crossing_pos_weight', type=float, default=1.0)
     parser.add_argument('--intent_pos_weight', type=float, default=1.0)
     parser.add_argument('--threshold_metric', type=str, default='f0.5')
     parser.add_argument('--use_saved_thresholds', type=bool, default=True)
 
-    # network
     parser.add_argument('--hidden_size', type=int, default=512)
     parser.add_argument('--hardtanh_limit', type=int, default=100)
     parser.add_argument('--use_image', type=bool, default=True,
@@ -96,11 +85,8 @@ def parse_args():
     parser.add_argument('--use_opticalflow', type=bool, default=False,
                         help='Use optical flow as a feature',
                         required=False)
-   
 
-    args = parser.parse_args()
-
-    return args
+    return parser.parse_args()
 
 
 def parse_config_file(file_path):
@@ -171,7 +157,7 @@ def get_run_dir(args):
 
 
 def sequence_cache_name(args):
-    return f'{args.dataset}_val_{args.input}_{args.output}_{args.stride}.csv'
+    return f'{args.dataset}_{args.dtype}_{args.input}_{args.output}_{args.stride}.csv'
 
 
 def resolve_artifact_dir(args, expected_filename=''):
@@ -214,7 +200,7 @@ def resolve_checkpoint_path(args):
         raise FileNotFoundError(f'Checkpoint not found: {checkpoint_path}')
     return checkpoint_path
 
-
+# Loads saved thresholds from the best summary file if it exists and contains valid thresholds.
 def load_saved_thresholds(args):
     summary_dir = resolve_artifact_dir(args, best_summary_name(args))
     summary_path = os.path.join(summary_dir, best_summary_name(args))
@@ -252,16 +238,14 @@ def load_model_state(model, checkpoint_path, device):
         print('Unexpected checkpoint keys:', unexpected_keys)
 
 
-# For 2D datasets
-def test_2d(args, test):
-    print('='*100)
-    print('Testing ...')
+def evaluate_2d(args, eval_set):
+    print('=' * 100)
+    print('Evaluating ...')
+    print('Split: ' + str(args.dtype))
     print('Task: ' + str(args.task))
     print('Learning rate: ' + str(args.lr))
     print('Number of epochs: ' + str(args.n_epochs))
     print('Hidden layer size: ' + str(args.hidden_size) + '\n')
-
-
 
     torch.manual_seed(0)
     use_distributed = should_use_distributed()
@@ -288,61 +272,50 @@ def test_2d(args, test):
     load_model_state(net, checkpoint_path, device)
     saved_thresholds = load_saved_thresholds(args) if args.use_saved_thresholds else None
     net.eval()
-    test_sampler = DistributedSampler(test) if use_distributed else None
+    eval_sampler = DistributedSampler(eval_set) if use_distributed else None
     dataloader_kwargs = {
-        'dataset': test,
+        'dataset': eval_set,
         'batch_size': args.batch_size,
         'pin_memory': args.pin_memory,
-        'sampler': test_sampler,
+        'sampler': eval_sampler,
         'shuffle': False,
         'num_workers': args.loader_workers,
         'drop_last': True,
     }
     if args.loader_workers > 0:
         dataloader_kwargs['prefetch_factor'] = args.prefetch_factor
-    dataloader_test = torch.utils.data.DataLoader(**dataloader_kwargs)
-    # mse = nn.MSELoss()
+    dataloader_eval = torch.utils.data.DataLoader(**dataloader_kwargs)
+
     huber = torch.nn.HuberLoss(reduction='sum', delta=1.0)
     crossing_ce = nn.CrossEntropyLoss()
     intent_ce = nn.CrossEntropyLoss()
-    val_s_scores   = []
-    val_c_scores   = []
 
-
-# 输出并评估三类结果：
-# 未来运动/轨迹相关预测 speed_preds
-# 未来过街状态序列 crossing_preds
-# 行人意图分类 intention_logits
-#     ade  = 0
-    fde  = 0
+    ade = 0
+    fde = 0
     aiou = 0
     fiou = 0
-    avg_acc = 0
-    avg_rec = 0
-    avg_pre = 0
-    mAP = 0
 
-    avg_epoch_val_s_loss   = 0
-    avg_epoch_val_c_loss   = 0
-    avg_epoch_val_i_loss   = 0
+    avg_epoch_eval_s_loss = 0
+    avg_epoch_eval_c_loss = 0
+    avg_epoch_eval_i_loss = 0
 
-    counter=0
+    counter = 0
     state_targets = []
     state_probs = []
     intent_targets = []
     intent_probs = []
 
     start = time.time()
-    test_batches = len(dataloader_test)
-    test_iterator = create_progress(
-        enumerate(dataloader_test, start=1),
-        desc='Test',
-        total=test_batches,
+    eval_batches = len(dataloader_eval)
+    eval_iterator = create_progress(
+        enumerate(dataloader_eval, start=1),
+        desc=f'Eval[{args.dtype}]',
+        total=eval_batches,
         verbose=verbose,
     )
 
-    for idx, inputs in test_iterator:
-        counter+=1
+    for idx, inputs in eval_iterator:
+        counter += 1
         speed = inputs['speed'].to(device, non_blocking=True)
         future_speed = inputs['future_speed'].to(device, non_blocking=True)
         pos = inputs['pos'].to(device, non_blocking=True)
@@ -356,7 +329,7 @@ def test_2d(args, test):
         label_c = inputs['cross_label'].to(device, non_blocking=True)
 
         with torch.no_grad():
-            mloss, speed_preds, crossing_preds, intention_logits, intentions = net(
+            _, speed_preds, crossing_preds, intention_logits, _ = net(
                 speed=speed,
                 pos=pos,
                 ped_attribute=ped_attribute,
@@ -367,7 +340,6 @@ def test_2d(args, test):
                 average=True,
             )
             speed_loss = huber(speed_preds, future_speed)
-            # speed_loss    = mse(speed_preds, future_speed)/100
 
             crossing_loss = 0.0
             for i in range(future_cross.shape[1]):
@@ -376,9 +348,9 @@ def test_2d(args, test):
             crossing_loss = crossing_loss / future_cross.shape[1]
             intention_loss = intent_ce(intention_logits, label_c.long().view(-1))
 
-            avg_epoch_val_s_loss += float(speed_loss)
-            avg_epoch_val_c_loss += float(crossing_loss)
-            avg_epoch_val_i_loss += float(intention_loss)
+            avg_epoch_eval_s_loss += float(speed_loss)
+            avg_epoch_eval_c_loss += float(crossing_loss)
+            avg_epoch_eval_i_loss += float(intention_loss)
 
             preds_p = utils.speed2pos(speed_preds, pos)
             ade += float(utils.ADE(preds_p, future_pos))
@@ -388,46 +360,43 @@ def test_2d(args, test):
 
             future_cross = torch.argmax(future_cross, dim=2).view(-1).cpu().numpy()
             crossing_prob = torch.softmax(crossing_preds, dim=2)[:, :, 1].reshape(-1).detach().cpu().numpy()
-            true_cls = future_cross
 
             label_c = label_c.view(-1).cpu().numpy()
             intention_prob = torch.softmax(intention_logits, dim=1)[:, 1].detach().cpu().numpy()
 
             state_probs.extend(crossing_prob.tolist())
-            state_targets.extend(true_cls.tolist())
+            state_targets.extend(future_cross.tolist())
             intent_probs.extend(intention_prob.tolist())
             intent_targets.extend(label_c.tolist())
 
-            mean_val_speed_loss = avg_epoch_val_s_loss / counter
-            mean_val_cross_loss = avg_epoch_val_c_loss / counter
-            mean_val_intent_loss = avg_epoch_val_i_loss / counter
+            mean_eval_speed_loss = avg_epoch_eval_s_loss / counter
+            mean_eval_cross_loss = avg_epoch_eval_c_loss / counter
+            mean_eval_intent_loss = avg_epoch_eval_i_loss / counter
             if verbose and tqdm is not None:
-                test_iterator.set_postfix(
-                    s=f'{mean_val_speed_loss:.4f}',
-                    c=f'{mean_val_cross_loss:.4f}',
-                    i=f'{mean_val_intent_loss:.4f}',
+                eval_iterator.set_postfix(
+                    s=f'{mean_eval_speed_loss:.4f}',
+                    c=f'{mean_eval_cross_loss:.4f}',
+                    i=f'{mean_eval_intent_loss:.4f}',
                     ade=f'{ade / counter:.4f}',
                 )
             else:
                 log_batch_progress(
                     verbose,
-                    'test',
+                    f'eval[{args.dtype}]',
                     idx,
-                    test_batches,
-                    speed_loss=mean_val_speed_loss,
-                    cross_loss=mean_val_cross_loss,
-                    intent_loss=mean_val_intent_loss,
+                    eval_batches,
+                    speed_loss=mean_eval_speed_loss,
+                    cross_loss=mean_eval_cross_loss,
+                    intent_loss=mean_eval_intent_loss,
                     ade=ade / counter,
                 )
 
-    avg_epoch_val_s_loss /= counter
-    avg_epoch_val_c_loss /= counter
-    avg_epoch_val_i_loss /= counter
-    val_s_scores.append(avg_epoch_val_s_loss)
-    val_c_scores.append(avg_epoch_val_c_loss)
+    avg_epoch_eval_s_loss /= counter
+    avg_epoch_eval_c_loss /= counter
+    avg_epoch_eval_i_loss /= counter
 
-    ade  /= counter
-    fde  /= counter     
+    ade /= counter
+    fde /= counter
     aiou /= counter
     fiou /= counter
 
@@ -441,8 +410,6 @@ def test_2d(args, test):
             (np.asarray(intent_probs) >= intent_threshold).astype(np.int64),
             np.asarray(intent_targets),
         )
-        state_metrics['threshold'] = state_threshold
-        intent_metrics['threshold'] = intent_threshold
         print(
             'Using saved validation thresholds: '
             f'state={state_threshold:.2f}, intent={intent_threshold:.2f}'
@@ -459,7 +426,7 @@ def test_2d(args, test):
             metric=args.threshold_metric,
         )
         print(
-            'Swept thresholds on evaluation split: '
+            f'Swept thresholds on {args.dtype} split: '
             f'state={state_threshold:.2f}, intent={intent_threshold:.2f}, metric={args.threshold_metric}'
         )
 
@@ -471,43 +438,37 @@ def test_2d(args, test):
         'Debug intent confusion TP/FP/FN/TN:',
         intent_metrics['tp'], intent_metrics['fp'], intent_metrics['fn'], intent_metrics['tn']
     )
-    print( '| ade: %.4f'% ade, 
-        '| fde: %.4f'% fde,
-        '| aiou: %.4f'% aiou,
-        '| fiou: %.4f'% fiou,
-        '| state_acc: %.4f'% state_metrics['accuracy'],
-        '| int_acc: %.4f'% intent_metrics['accuracy'],
-        '| f1_int: %.4f'% intent_metrics['f1'],
-        '| f1_state: %.4f'% state_metrics['f1'],
-        '| pre: %.4f'% state_metrics['precision'],
-        '| recall_sc: %.4f'% state_metrics['recall'],
-        '| bal_sc: %.4f'% state_metrics['balanced_accuracy'],
-        '| th_sc: %.2f'% state_threshold,
-        '| pre_int: %.4f'% intent_metrics['precision'],
-        '| recall_int: %.4f'% intent_metrics['recall'],
-        '| bal_int: %.4f'% intent_metrics['balanced_accuracy'],
-        '| th_int: %.2f'% intent_threshold,
-        '| t:%.4f'%(time.time()-start))
+    print(
+        '| ade: %.4f' % ade,
+        '| fde: %.4f' % fde,
+        '| aiou: %.4f' % aiou,
+        '| fiou: %.4f' % fiou,
+        '| state_acc: %.4f' % state_metrics['accuracy'],
+        '| int_acc: %.4f' % intent_metrics['accuracy'],
+        '| f1_int: %.4f' % intent_metrics['f1'],
+        '| f1_state: %.4f' % state_metrics['f1'],
+        '| pre: %.4f' % state_metrics['precision'],
+        '| recall_sc: %.4f' % state_metrics['recall'],
+        '| bal_sc: %.4f' % state_metrics['balanced_accuracy'],
+        '| th_sc: %.2f' % state_threshold,
+        '| pre_int: %.4f' % intent_metrics['precision'],
+        '| recall_int: %.4f' % intent_metrics['recall'],
+        '| bal_int: %.4f' % intent_metrics['balanced_accuracy'],
+        '| th_int: %.2f' % intent_threshold,
+        '| t:%.4f' % (time.time() - start),
+    )
 
 
-
-
-if __name__ == '__main__':
+def main():
     args = parse_args()
     config = parse_config_file(os.path.join(os.path.dirname(__file__), 'config.yml'))
-    if config.get('use_argument_parser') == False:
+    if config.get('use_argument_parser') is False:
         for arg in vars(args):
             if arg in config:
                 setattr(args, arg, config[arg])
 
-    # create output dir
-    # if not args.log_name:
-    #     args.log_name = '{}_{}_{}_{}'.format(args.dataset, str(args.input),\
-    #                             str(args.output), str(args.stride)) 
-    # if not os.path.isdir(os.path.join(args.out_dir, args.log_name)):
-    #     os.mkdir(os.path.join(args.out_dir, args.log_name))
+    args.dtype = str(args.dtype).lower()
 
-    # select dataset
     if args.dataset == 'jaad':
         args.is_3D = False
     elif args.dataset == 'jta':
@@ -517,28 +478,25 @@ if __name__ == '__main__':
     else:
         print('Unknown dataset entered! Please select from available datasets: jaad, jta, nuscenes...')
 
-    # load data
     data_out_dir = resolve_artifact_dir(args, sequence_cache_name(args))
-    test_set = eval('datasets.' + args.dataset)(
-                data_dir=args.data_dir,
-                out_dir=data_out_dir,
-                dtype='val',
-                input=args.input,
-                output=args.output,
-                stride=args.stride,
-                skip=args.skip,
-                task=args.task,
-                from_file=args.from_file,
-                save=args.save,
-                use_images=args.use_image,
-                use_attribute=args.use_attribute,
-                use_opticalflow=args.use_opticalflow
-                )
+    eval_set = eval('datasets.' + args.dataset)(
+        data_dir=args.data_dir,
+        out_dir=data_out_dir,
+        dtype=args.dtype,
+        input=args.input,
+        output=args.output,
+        stride=args.stride,
+        skip=args.skip,
+        task=args.task,
+        from_file=args.from_file,
+        save=args.save,
+        use_images=args.use_image,
+        use_attribute=args.use_attribute,
+        use_opticalflow=args.use_opticalflow
+    )
 
-    # test_loader = data_loader(args, test_set)
+    evaluate_2d(args, eval_set)
 
-    # initiate network
-    # net = network.PV_LSTM(args).to(args.device)
 
-    # training
-    test_2d(args,  test_set)
+if __name__ == '__main__':
+    main()
