@@ -10,3 +10,9 @@ pre: step-level precision
 recall_sc: step-level recall
 pre_int: sequence-level intention precision
 recall_int: sequence-level intention recall
+
+
+# eval
+```sh
+python eval.py --checkpoint output/model_best.pkl --dtype test
+```
