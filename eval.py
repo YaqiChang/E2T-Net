@@ -23,6 +23,18 @@ except ImportError:
     tqdm = None
 
 
+def parse_bool_arg(value):
+    if isinstance(value, bool):
+        return value
+
+    lowered = str(value).strip().lower()
+    if lowered in {'true', '1', 'yes', 'y', 'on'}:
+        return True
+    if lowered in {'false', '0', 'no', 'n', 'off'}:
+        return False
+    raise argparse.ArgumentTypeError(f'Invalid boolean value: {value}')
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description='Evaluate PTINet network')
 
@@ -49,40 +61,40 @@ def parse_args():
                         default=16,
                         required=False)
     parser.add_argument('--skip', type=int, default=1)
-    parser.add_argument('--is_3D', type=bool, default=False)
+    parser.add_argument('--is_3D', type=parse_bool_arg, default=False)
     parser.add_argument('--dtype', type=str, default='test')
-    parser.add_argument('--from_file', type=bool, default=False)
-    parser.add_argument('--save', type=bool, default=True)
+    parser.add_argument('--from_file', type=parse_bool_arg, default=False)
+    parser.add_argument('--save', type=parse_bool_arg, default=True)
     parser.add_argument('--log_name', type=str, default='')
     parser.add_argument('--checkpoint', type=str, default='',
                         help='Checkpoint file to evaluate. Accepts .pkl or .pth.')
     parser.add_argument('--loader_workers', type=int, default=10)
-    parser.add_argument('--loader_shuffle', type=bool, default=True)
-    parser.add_argument('--pin_memory', type=bool, default=False)
+    parser.add_argument('--loader_shuffle', type=parse_bool_arg, default=True)
+    parser.add_argument('--pin_memory', type=parse_bool_arg, default=False)
     parser.add_argument('--prefetch_factor', type=int, default=3)
 
     parser.add_argument('--device', type=str, default='cuda')
     parser.add_argument('--batch_size', type=int, default=1)
     parser.add_argument('--n_epochs', type=int, default=200)
     parser.add_argument('--lr', type=int, default=0.001)
-    parser.add_argument('--lr_scheduler', type=bool, default=False)
+    parser.add_argument('--lr_scheduler', type=parse_bool_arg, default=False)
     parser.add_argument('--crossing_pos_weight', type=float, default=1.0)
     parser.add_argument('--intent_pos_weight', type=float, default=1.0)
     parser.add_argument('--threshold_metric', type=str, default='f0.5')
-    parser.add_argument('--use_saved_thresholds', type=bool, default=True)
+    parser.add_argument('--use_saved_thresholds', type=parse_bool_arg, default=True)
 
     parser.add_argument('--hidden_size', type=int, default=512)
     parser.add_argument('--hardtanh_limit', type=int, default=100)
-    parser.add_argument('--use_image', type=bool, default=True,
+    parser.add_argument('--use_image', type=parse_bool_arg, default=True,
                         help='Use input image as a feature',
                         required=False)
     parser.add_argument('--image_network', type=str, default='clstm',
                         help='select backbone',
                         required=False)
-    parser.add_argument('--use_attribute', type=bool, default=True,
+    parser.add_argument('--use_attribute', type=parse_bool_arg, default=True,
                         help='Use input attribute as a feature',
                         required=False)
-    parser.add_argument('--use_opticalflow', type=bool, default=False,
+    parser.add_argument('--use_opticalflow', type=parse_bool_arg, default=False,
                         help='Use optical flow as a feature',
                         required=False)
 
@@ -270,7 +282,20 @@ def evaluate_2d(args, eval_set):
     checkpoint_path = resolve_checkpoint_path(args)
     print(checkpoint_path)
     load_model_state(net, checkpoint_path, device)
-    saved_thresholds = load_saved_thresholds(args) if args.use_saved_thresholds else None
+    if args.dtype == 'test':
+        if not args.use_saved_thresholds:
+            raise ValueError(
+                'Test evaluation must use thresholds saved from the validation split. '
+                'Set --use_saved_thresholds True or evaluate on val.'
+            )
+        saved_thresholds = load_saved_thresholds(args)
+        if saved_thresholds is None:
+            raise FileNotFoundError(
+                'Validation thresholds were not found. Run training first so best_metrics.json '
+                'contains state_threshold and intent_threshold.'
+            )
+    else:
+        saved_thresholds = load_saved_thresholds(args) if args.use_saved_thresholds else None
     net.eval()
     eval_sampler = DistributedSampler(eval_set) if use_distributed else None
     dataloader_kwargs = {

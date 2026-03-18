@@ -30,6 +30,18 @@ except ImportError:
     tqdm = None
 
 
+def parse_bool_arg(value):
+    if isinstance(value, bool):
+        return value
+
+    lowered = str(value).strip().lower()
+    if lowered in {'true', '1', 'yes', 'y', 'on'}:
+        return True
+    if lowered in {'false', '0', 'no', 'n', 'off'}:
+        return False
+    raise argparse.ArgumentTypeError(f'Invalid boolean value: {value}')
+
+
 METRIC_COLUMNS = [
     'epoch',
     'train_loss_s',
@@ -115,61 +127,63 @@ def parse_args():
     parser.add_argument('--skip', type=int, default=1)
 
     parser.add_argument('--dtype', type=str, default='train')
-    parser.add_argument("--from_file", type=bool, default=False)
-    parser.add_argument('--save', type=bool, default=True)
+    parser.add_argument("--from_file", type=parse_bool_arg, default=False)
+    parser.add_argument('--save', type=parse_bool_arg, default=True)
     parser.add_argument('--log_name', type=str, default='')
     parser.add_argument('--loader_workers', type=int, default=16)
-    parser.add_argument('--loader_shuffle', type=bool, default=True)
-    parser.add_argument('--pin_memory', type=bool, default=False)
+    parser.add_argument('--loader_shuffle', type=parse_bool_arg, default=True)
+    parser.add_argument('--pin_memory', type=parse_bool_arg, default=False)
     parser.add_argument('--prefetch_factor', type=int, default=3)
 
     parser.add_argument('--device', type=str, default='cuda')
     parser.add_argument('--batch_size', type=int, default=4)
     parser.add_argument('--n_epochs', type=int, default=100)
     parser.add_argument('--lr', type=int, default=1e-5)
-    parser.add_argument('--lr_scheduler', type=bool, default=False)
+    parser.add_argument('--lr_scheduler', type=parse_bool_arg, default=False)
     parser.add_argument('--local-rank', type=int, default=0)
     parser.add_argument('--crossing_pos_weight', type=float, default=1.0)
     parser.add_argument('--intent_pos_weight', type=float, default=1.0)
     parser.add_argument('--intention_loss_weight', type=float, default=1.0)
     parser.add_argument('--vae_loss_weight', type=float, default=1e-5)
-    parser.add_argument('--auto_class_weights', type=bool, default=False)
+    parser.add_argument('--auto_class_weights', type=parse_bool_arg, default=False)
     parser.add_argument('--max_class_weight', type=float, default=1.0)
-    parser.add_argument('--use_balanced_sampler', type=bool, default=True)
+    parser.add_argument('--use_balanced_sampler', type=parse_bool_arg, default=True)
     parser.add_argument('--sampler_target_pos_rate', type=float, default=0.3)
     parser.add_argument('--threshold_metric', type=str, default='f0.5')
-    parser.add_argument('--abort_on_collapse', type=bool, default=True)
+    parser.add_argument('--abort_on_collapse', type=parse_bool_arg, default=True)
     parser.add_argument('--collapse_patience_epochs', type=int, default=10)
     parser.add_argument('--collapse_min_state_f1', type=float, default=0.05)
     parser.add_argument('--collapse_min_intent_f1', type=float, default=0.05)
     parser.add_argument('--collapse_max_state_recall', type=float, default=0.01)
     parser.add_argument('--collapse_max_intent_recall', type=float, default=0.01)
-    parser.add_argument('--best_metric_f1_weight', type=float, default=1.0)
+    parser.add_argument('--best_metric_f1_weight', type=float, default=2.0)
     parser.add_argument('--best_metric_recall_weight', type=float, default=1.0)
-    parser.add_argument('--best_metric_precision_weight', type=float, default=1.0)
+    parser.add_argument('--best_metric_precision_weight', type=float, default=0.25)
+    parser.add_argument('--best_metric_bal_acc_weight', type=float, default=0.5)
+    parser.add_argument('--best_metric_ade_weight', type=float, default=0.01)
     parser.add_argument('--weight_decay', type=float, default=1e-4)
     parser.add_argument('--grad_clip_norm', type=float, default=5.0)
     parser.add_argument('--label_smoothing', type=float, default=0.05)
-    parser.add_argument('--use_plateau_scheduler', type=bool, default=True)
+    parser.add_argument('--use_plateau_scheduler', type=parse_bool_arg, default=True)
     parser.add_argument('--plateau_factor', type=float, default=0.5)
     parser.add_argument('--plateau_patience', type=int, default=4)
     parser.add_argument('--plateau_min_lr', type=float, default=1e-6)
-    parser.add_argument('--use_early_stopping', type=bool, default=True)
+    parser.add_argument('--use_early_stopping', type=parse_bool_arg, default=True)
     parser.add_argument('--early_stopping_patience', type=int, default=12)
     parser.add_argument('--early_stopping_min_delta', type=float, default=1e-4)
 
     parser.add_argument('--hidden_size', type=int, default=512)
     parser.add_argument('--hardtanh_limit', type=int, default=100)
-    parser.add_argument('--use_image', type=bool, default=False,
+    parser.add_argument('--use_image', type=parse_bool_arg, default=False,
                         help='Use input image as a feature',
                         required=False)
     parser.add_argument('--image_network', type=str, default='resnet50',
                         help='select backbone',
                         required=False)
-    parser.add_argument('--use_attribute', type=bool, default=True,
+    parser.add_argument('--use_attribute', type=parse_bool_arg, default=True,
                         help='Use input attribute as a feature',
                         required=False)
-    parser.add_argument('--use_opticalflow', type=bool, default=False,
+    parser.add_argument('--use_opticalflow', type=parse_bool_arg, default=False,
                         help='Use input emdedding as a feature',
                         required=False)
 
@@ -391,15 +405,18 @@ def build_balanced_sampler(dataset, target_pos_rate=0.5):
 
 def compute_selection_score(args, ade, state_metrics, intent_metrics):
     classification_score = (
-        args.best_metric_f1_weight * (state_metrics['f0_5'] + intent_metrics['f0_5'])
+        args.best_metric_f1_weight * (state_metrics['f1'] + intent_metrics['f1'])
+        + args.best_metric_recall_weight * (
+            state_metrics['recall'] + intent_metrics['recall']
+        )
         + args.best_metric_precision_weight * (
             state_metrics['precision'] + intent_metrics['precision']
         )
-        + args.best_metric_recall_weight * (
+        + args.best_metric_bal_acc_weight * (
             state_metrics['balanced_accuracy'] + intent_metrics['balanced_accuracy']
         )
     )
-    return classification_score - 0.01 * float(ade)
+    return classification_score - args.best_metric_ade_weight * float(ade)
 
 
 def train(args, train, val):
@@ -487,6 +504,16 @@ def train(args, train, val):
         print('Label smoothing: %.3f' % args.label_smoothing)
         print('Plateau scheduler: ' + str(args.use_plateau_scheduler))
         print('Early stopping: ' + str(args.use_early_stopping))
+        print(
+            'Best checkpoint score weights: '
+            'f1=%.2f recall=%.2f precision=%.2f bal_acc=%.2f ade=%.4f' % (
+                args.best_metric_f1_weight,
+                args.best_metric_recall_weight,
+                args.best_metric_precision_weight,
+                args.best_metric_bal_acc_weight,
+                args.best_metric_ade_weight,
+            )
+        )
         print('Balanced sampler: ' + str(train_sampler is not None and not use_distributed))
         print('Sampler target positive rate: %.3f' % args.sampler_target_pos_rate)
         print('Threshold metric: ' + args.threshold_metric)
