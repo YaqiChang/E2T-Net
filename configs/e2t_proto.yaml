@@ -1,0 +1,55 @@
+# Prototype configuration for the standalone E2T line.
+# This file is intentionally independent from the baseline config.yml.
+
+experiment:
+  name: e2t_proto
+  output_dir: output/e2t_proto
+  seed: 42
+
+data:
+  dataset: pie
+  data_dir: /path/to/pie_or_proto_data
+  split_train: train
+  split_val: val
+  split_test: test
+  obs_len: 5
+  pred_len: 5
+  use_pose: false
+  use_scene: false
+  return_sample_name: true
+
+features:
+  trajectory_dim: 4
+  pose_dim: 0
+  scene_dim: 0
+  fused_input_dim: 4
+  normalize: true
+  use_temporal_differences: false
+  use_motion_features: false
+
+model:
+  evidence_encoder:
+    hidden_dim: 128
+    evidence_dim: 64
+    dropout: 0.0
+    use_score_head: true
+  belief_updater:
+    updater_type: leaky
+    belief_dim: 64
+    leak: 0.9
+    dropout: 0.0
+  intent_head:
+    num_classes: 2
+    pooling: last
+
+train:
+  device: cuda
+  batch_size: 32
+  epochs: 20
+  learning_rate: 0.001
+  weight_decay: 0.0001
+
+loss:
+  intent_weight: 1.0
+  smoothness_weight: 0.0
+  early_trigger_weight: 0.0
