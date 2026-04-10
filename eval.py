@@ -3,10 +3,12 @@ import time
 import os
 import argparse
 import sys
+from ast import literal_eval
 
 import torch
 import torch.nn as nn
 import numpy as np
+import pandas as pd
 
 import datasets
 import model.network_image as network
@@ -47,6 +49,9 @@ def parse_args():
     parser.add_argument('--out_dir', type=str,
                         default='/projappl/project_2007864/PIE_lstm_vae_clstm/bounding-box-prediction/output_32/',
                         required=False)
+    parser.add_argument('--artifact_dir', type=str, default='',
+                        help='Directory containing checkpoint, cached sequences, and best_metrics.json.',
+                        required=False)
     parser.add_argument('--task', type=str,
                         default='2D_bounding_box-intention',
                         required=False)
@@ -68,6 +73,15 @@ def parse_args():
     parser.add_argument('--log_name', type=str, default='')
     parser.add_argument('--checkpoint', type=str, default='',
                         help='Checkpoint file to evaluate. Accepts .pkl or .pth.')
+    parser.add_argument('--save_sample_results', type=parse_bool_arg, default=True,
+                        help='Export per-sample prediction rows for downstream analysis.',
+                        required=False)
+    parser.add_argument('--sample_results_dir', type=str, default='',
+                        help='Directory for analysis-ready exported prediction rows.',
+                        required=False)
+    parser.add_argument('--sample_results_name', type=str, default='',
+                        help='Filename for the exported prediction table.',
+                        required=False)
     parser.add_argument('--loader_workers', type=int, default=10)
     parser.add_argument('--loader_shuffle', type=parse_bool_arg, default=True)
     parser.add_argument('--pin_memory', type=parse_bool_arg, default=False)
@@ -165,7 +179,21 @@ def resolve_runtime_device(device_arg, local_rank=0):
 
 
 def get_run_dir(args):
+    if getattr(args, 'artifact_dir', ''):
+        return args.artifact_dir
     return os.path.join(args.out_dir, args.log_name) if args.log_name else args.out_dir
+
+
+def get_checkpoint_dir(args):
+    if not getattr(args, 'checkpoint', ''):
+        return ''
+    if os.path.isabs(args.checkpoint) and os.path.exists(args.checkpoint):
+        return os.path.dirname(args.checkpoint)
+
+    direct_path = os.path.abspath(args.checkpoint)
+    if os.path.exists(direct_path):
+        return os.path.dirname(direct_path)
+    return ''
 
 
 def sequence_cache_name(args):
@@ -175,7 +203,8 @@ def sequence_cache_name(args):
 def resolve_artifact_dir(args, expected_filename=''):
     candidates = []
     primary = get_run_dir(args)
-    for candidate in [primary, args.out_dir]:
+    checkpoint_dir = get_checkpoint_dir(args)
+    for candidate in [primary, checkpoint_dir, args.out_dir]:
         if candidate and candidate not in candidates:
             candidates.append(candidate)
 
@@ -197,6 +226,15 @@ def default_checkpoint_name(args):
 
 def best_summary_name(args):
     return f'best_metrics{checkpoint_suffix(args)}.json'
+
+
+def default_sample_results_name(args):
+    return f'{args.dataset}_{args.dtype}_sample_predictions.csv'
+
+
+def default_sample_results_dir(args):
+    artifact_dir = resolve_artifact_dir(args)
+    return os.path.join(artifact_dir, 'res_analyze')
 
 
 def resolve_checkpoint_path(args):
@@ -248,6 +286,118 @@ def load_model_state(model, checkpoint_path, device):
         print('Missing checkpoint keys:', missing_keys)
     if unexpected_keys:
         print('Unexpected checkpoint keys:', unexpected_keys)
+
+
+def parse_sequence_cell(value):
+    if isinstance(value, str):
+        return literal_eval(value)
+    return value
+
+
+def maybe_int(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def extract_video_id(image_paths):
+    if not image_paths:
+        return ''
+    return os.path.basename(os.path.dirname(image_paths[0]))
+
+
+def extract_frame_id(path_or_name):
+    stem = os.path.splitext(os.path.basename(str(path_or_name)))[0]
+    digits = ''.join(ch for ch in stem if ch.isdigit())
+    return maybe_int(digits)
+
+
+def infer_trigger_frame_id(obs_frame_ids, obs_cross, future_cross, skip):
+    for frame_id, state in zip(obs_frame_ids, obs_cross):
+        if float(state) >= 0.5 and frame_id is not None:
+            return frame_id
+
+    valid_obs_frames = [frame_id for frame_id in obs_frame_ids if frame_id is not None]
+    if not valid_obs_frames:
+        return None
+    last_obs_frame = valid_obs_frames[-1]
+    for future_index, state in enumerate(future_cross, start=1):
+        if float(state) >= 0.5:
+            return last_obs_frame + future_index * skip
+    return None
+
+
+def resolve_sample_results_path(args):
+    output_dir = args.sample_results_dir or default_sample_results_dir(args)
+    os.makedirs(output_dir, exist_ok=True)
+    filename = args.sample_results_name or default_sample_results_name(args)
+    return os.path.join(output_dir, filename)
+
+
+def build_sample_rows(
+    args,
+    eval_set,
+    start_index,
+    batch_size,
+    crossing_probs,
+    future_cross_np,
+    intent_probs,
+    intent_targets_np,
+):
+    rows = []
+    horizon = crossing_probs.shape[1]
+    for batch_index in range(batch_size):
+        dataset_index = start_index + batch_index
+        seq = eval_set.data.iloc[dataset_index]
+
+        image_paths = parse_sequence_cell(seq['imagefolderpath']) if 'imagefolderpath' in seq else []
+        filenames = parse_sequence_cell(seq['filename']) if 'filename' in seq else []
+        crossing_obs = parse_sequence_cell(seq['crossing_obs']) if 'crossing_obs' in seq else []
+        future_cross_seq = parse_sequence_cell(seq['crossing_true']) if 'crossing_true' in seq else future_cross_np[batch_index].tolist()
+
+        obs_frame_ids = [extract_frame_id(path) for path in image_paths] if image_paths else [extract_frame_id(name) for name in filenames]
+        last_obs_frame = next((frame_id for frame_id in reversed(obs_frame_ids) if frame_id is not None), None)
+        trigger_frame = infer_trigger_frame_id(obs_frame_ids, crossing_obs, future_cross_seq, args.skip)
+        video_id = extract_video_id(image_paths)
+        ped_id = seq['ID'] if 'ID' in seq else dataset_index
+        sequence_key = f'{args.dtype}_{dataset_index}_{ped_id}'
+
+        for step_index in range(horizon):
+            frame_id = None if last_obs_frame is None else last_obs_frame + (step_index + 1) * args.skip
+            time_to_trigger = None if trigger_frame is None or frame_id is None else frame_id - trigger_frame
+            rows.append({
+                'split': args.dtype,
+                'sequence_key': sequence_key,
+                'dataset_index': dataset_index,
+                'video_id': video_id,
+                'ped_id': ped_id,
+                'frame_id': frame_id,
+                'step_idx': step_index,
+                'state_gt': int(future_cross_np[batch_index, step_index]),
+                'intent_gt': int(intent_targets_np[batch_index]),
+                'state_score': float(crossing_probs[batch_index, step_index]),
+                'intent_score': float(intent_probs[batch_index]),
+                'trigger_frame': trigger_frame,
+                'time_to_trigger': time_to_trigger,
+            })
+    return rows
+
+
+def export_sample_results(args, rows, state_threshold, intent_threshold):
+    if not rows:
+        return None
+
+    df = pd.DataFrame(rows)
+    df['state_pred_at_eval_th'] = (df['state_score'].to_numpy() >= state_threshold).astype(np.int64)
+    intent_pred = (df['intent_score'].to_numpy() >= intent_threshold).astype(np.int64)
+    df['intent_pred_at_eval_th'] = intent_pred
+    df['state_threshold'] = float(state_threshold)
+    df['intent_threshold'] = float(intent_threshold)
+    output_path = resolve_sample_results_path(args)
+    df.to_csv(output_path, index=False)
+    print(f'Saved sample analysis table: {output_path}')
+    return output_path
 
 
 def evaluate_2d(args, eval_set):
@@ -329,6 +479,8 @@ def evaluate_2d(args, eval_set):
     state_probs = []
     intent_targets = []
     intent_probs = []
+    sample_rows = []
+    sample_start_index = 0
 
     start = time.time()
     eval_batches = len(dataloader_eval)
@@ -383,8 +535,10 @@ def evaluate_2d(args, eval_set):
             aiou += float(utils.AIOU(preds_p, future_pos))
             fiou += float(utils.FIOU(preds_p, future_pos))
 
-            future_cross = torch.argmax(future_cross, dim=2).view(-1).cpu().numpy()
+            future_cross_batch = torch.argmax(future_cross, dim=2).cpu().numpy()
+            future_cross = future_cross_batch.reshape(-1)
             crossing_prob = torch.softmax(crossing_preds, dim=2)[:, :, 1].reshape(-1).detach().cpu().numpy()
+            crossing_prob_seq = torch.softmax(crossing_preds, dim=2)[:, :, 1].detach().cpu().numpy()
 
             label_c = label_c.view(-1).cpu().numpy()
             intention_prob = torch.softmax(intention_logits, dim=1)[:, 1].detach().cpu().numpy()
@@ -393,6 +547,21 @@ def evaluate_2d(args, eval_set):
             state_targets.extend(future_cross.tolist())
             intent_probs.extend(intention_prob.tolist())
             intent_targets.extend(label_c.tolist())
+
+            if args.save_sample_results:
+                sample_rows.extend(
+                    build_sample_rows(
+                        args=args,
+                        eval_set=eval_set,
+                        start_index=sample_start_index,
+                        batch_size=future_cross_batch.shape[0],
+                        crossing_probs=crossing_prob_seq,
+                        future_cross_np=future_cross_batch,
+                        intent_probs=intention_prob,
+                        intent_targets_np=label_c,
+                    )
+                )
+                sample_start_index += future_cross_batch.shape[0]
 
             mean_eval_speed_loss = avg_epoch_eval_s_loss / counter
             mean_eval_cross_loss = avg_epoch_eval_c_loss / counter
@@ -482,6 +651,9 @@ def evaluate_2d(args, eval_set):
         '| th_int: %.2f' % intent_threshold,
         '| t:%.4f' % (time.time() - start),
     )
+
+    if args.save_sample_results:
+        export_sample_results(args, sample_rows, state_threshold, intent_threshold)
 
 
 def main():
