@@ -13,6 +13,8 @@ import copy
 from concurrent.futures import ThreadPoolExecutor
 from torchvision import transforms
 
+from datasets.pose_utils import JAADPoseNPZAdapter
+
 try:
     from tqdm.auto import tqdm
 except ImportError:
@@ -76,6 +78,20 @@ class JAAD(torch.utils.data.Dataset):
         print('Computing centers ...')
         return df.apply(lambda row: utils.compute_center(row), axis=1)
 
+    def _resolve_pose_file(self, pose_file):
+        if pose_file:
+            return pose_file
+        return os.path.join(self.data_dir, 'jaad_pose_annotations_fixed.npz')
+
+    def _validate_pose_metadata(self):
+        required_columns = ['source_video_id', 'source_ped_id', 'obs_frame_sequence']
+        missing_columns = [column for column in required_columns if column not in self.data.columns]
+        if missing_columns:
+            raise ValueError(
+                'Cached JAAD sequence file does not contain pose lookup metadata '
+                f'{missing_columns}. Rebuild the cache with from_file=False when use_pose=True.'
+            )
+
     def __init__(self,
                 data_dir,
                 out_dir,
@@ -90,7 +106,10 @@ class JAAD(torch.utils.data.Dataset):
                 use_images=False,
                 use_attribute=False,
                 use_opticalflow=False,
-                image_resize=[240, 426]
+                image_resize=[240, 426],
+                use_pose=False,
+                pose_file='',
+                pose_format='jaad_hrnet_npz'
                 ):
 
         print('*' * 30)
@@ -107,8 +126,13 @@ class JAAD(torch.utils.data.Dataset):
         self.use_image = use_images
         self.use_attribute = use_attribute
         self.use_opticalflow = use_opticalflow
+        self.use_pose = use_pose
+        self.pose_file = self._resolve_pose_file(pose_file)
+        self.pose_format = pose_format
         self.image_resize = image_resize
         self.max_threads = 16
+        self.pose_adapter = None
+        self.pose_missing_log_count = 0
 
         self.filename = 'jaad_{}_{}_{}_{}.csv'.format(dtype, str(input), str(output), str(stride))
         cache_path = os.path.join(self.out_dir, self.filename)
@@ -124,7 +148,7 @@ class JAAD(torch.utils.data.Dataset):
             print('Reading data files ...')
             df = pd.DataFrame()
             new_index = 0
-            files = sorted(glob.glob(os.path.join(data_dir, dtype, "*")))
+            files = sorted(glob.glob(os.path.join(data_dir, dtype, '*')))
             if not files:
                 raise FileNotFoundError(
                     f'No JAAD csv files found under {os.path.join(data_dir, dtype)}. '
@@ -134,7 +158,9 @@ class JAAD(torch.utils.data.Dataset):
                 temp = pd.read_csv(file)
                 if not temp.empty:
                     id_col = self._resolve_id_column(temp)
-                    temp['file'] = [file for t in range(temp.shape[0])]
+                    temp['file'] = [file for _ in range(temp.shape[0])]
+                    temp['source_ped_id'] = temp[id_col].astype(str)
+                    temp['source_video_id'] = os.path.splitext(os.path.basename(file))[0]
 
                     for index in temp[id_col].unique():
                         new_index += 1
@@ -169,7 +195,10 @@ class JAAD(torch.utils.data.Dataset):
             t = df.groupby(['ID'])['ped_attribute'].apply(list).reset_index(name='ped_attribute').drop(columns='ID')
             h = df.groupby(['ID'])['ped_behavior'].apply(list).reset_index(name='ped_behavior').drop(columns='ID')
             w = df.groupby(['ID'])['scene_attribute'].apply(list).reset_index(name='scene_attribute').drop(columns='ID')
-            d = bb.join(s).join(f).join(c).join(t).join(h).join(w)
+            p = df.groupby(['ID'])['source_ped_id'].apply(list).reset_index(name='source_ped_id').drop(columns='ID')
+            v = df.groupby(['ID'])['source_video_id'].apply(list).reset_index(name='source_video_id').drop(columns='ID')
+            r = df.groupby(['ID'])['frame'].apply(list).reset_index(name='frame').drop(columns='ID')
+            d = bb.join(s).join(f).join(c).join(t).join(h).join(w).join(p).join(v).join(r)
 
             d['label'] = d['crossing_true']
             d.label = d.label.apply(lambda x: 1 if 1 in x else 0)
@@ -187,6 +216,9 @@ class JAAD(torch.utils.data.Dataset):
             p_attribute = np.empty((0, 3))
             p_behavior = np.empty((0, input, 4))
             s_attribute = np.empty((0, input, 10))
+            obs_frame = np.empty((0, input))
+            source_ped_ids = []
+            source_video_ids = []
 
             for i in self._progress_iter(range(d.shape[0]), desc='Building sequences', total=d.shape[0]):
                 ped = d.loc[i]
@@ -200,13 +232,21 @@ class JAAD(torch.utils.data.Dataset):
                     p_behavior = np.vstack((p_behavior, np.array(ped.ped_behavior[k:k + input]).reshape(1, input, 4)))
                     s_attribute = np.vstack((s_attribute, np.array(ped.scene_attribute[k:k + input]).reshape(1, input, 10)))
                     file = np.vstack((file, np.array(ped.filename[k:k + input]).reshape(1, input)))
+                    obs_frame = np.vstack((obs_frame, np.array(ped.frame[k:k + input]).reshape(1, input)))
                     cross_o = np.vstack((cross_o, np.array(ped.crossing_true[k:k + input]).reshape(1, input)))
                     cross = np.vstack((cross, np.array(ped.crossing_true[k + input:k + input + output]).reshape(1, output)))
+                    source_ped_ids.append(str(ped['source_ped_id'][0]))
+                    source_video_ids.append(str(ped['source_video_id'][0]))
 
                     k += stride
 
             dt = pd.DataFrame({'ID': ind.reshape(-1)})
             ped_dt = pd.DataFrame({'ped_attribute': p_attribute.reshape(-1, 3).tolist()})
+            pose_dt = pd.DataFrame({
+                'source_ped_id': source_ped_ids,
+                'source_video_id': source_video_ids,
+                'obs_frame_sequence': obs_frame.reshape(-1, input).tolist(),
+            })
             data = pd.DataFrame({'bounding_box': bounding_box_o.reshape(-1, 1, input, 4).tolist(),
                                  'future_bounding_box': bounding_box_t.reshape(-1, 1, output, 4).tolist(),
                                  'ped_behavior': p_behavior.reshape(-1, 1, input, 4).tolist(),
@@ -219,7 +259,7 @@ class JAAD(torch.utils.data.Dataset):
             data.future_bounding_box = data.future_bounding_box.apply(lambda x: x[0])
             data.ped_behavior = data.ped_behavior.apply(lambda x: x[0])
             data.scene_attribute = data.scene_attribute.apply(lambda x: x[0])
-            data = ped_dt.join(data)
+            data = ped_dt.join(pose_dt).join(data)
             data = dt.join(data)
 
             data['label'] = data.crossing_true.apply(lambda x: 1. if 1. in x else 0.)
@@ -231,7 +271,15 @@ class JAAD(torch.utils.data.Dataset):
 
         self.data = sequence_centric.copy().reset_index(drop=True)
 
-        print(dtype, "set loaded")
+        if self.use_pose:
+            self._validate_pose_metadata()
+            self.pose_adapter = JAADPoseNPZAdapter(
+                pose_file=self.pose_file,
+                pose_format=self.pose_format,
+            )
+            print(f'Loaded JAAD pose adapter from {self.pose_file}')
+
+        print(dtype, 'set loaded')
 
     def __len__(self):
         return len(self.data)
@@ -257,7 +305,7 @@ class JAAD(torch.utils.data.Dataset):
 
     def _load_image_op(self, image_path_op):
         image_op = Image.open(image_path_op).resize((self.image_resize[0], self.image_resize[1]))
-        image_op = transforms.functional.to_tensor(image_op)
+        image_op = self._to_tensor(image_op)
         return image_op
 
     def _read_images_cc(self, image_paths, bbox):
@@ -273,7 +321,7 @@ class JAAD(torch.utils.data.Dataset):
         y = y - (height / 2)
         x, y, width, height = int(x), int(y), int(width), int(height)
         img_cc = cv2.resize(np.array(Image.open(image_path))[y:y + height, x:x + width], (self.image_resize[0], self.image_resize[1]))
-        image_cc = transforms.functional.to_tensor(img_cc)
+        image_cc = self._to_tensor(img_cc)
         return image_cc
 
     def __getitem__(self, index):
@@ -328,6 +376,29 @@ class JAAD(torch.utils.data.Dataset):
                 'pos': obs,
                 'future_pos': true,
                 'id': seq.ID}
+
+        if self.use_pose:
+            frame_ids = [seq.obs_frame_sequence[i] for i in range(0, self.input, self.skip)]
+            pose_np, pose_conf_np, missing_count = self.pose_adapter.get_sequence(
+                video_id=seq.source_video_id,
+                ped_id=seq.source_ped_id,
+                frame_ids=frame_ids,
+            )
+            if missing_count > 0 and self.pose_missing_log_count < 3:
+                print(
+                    'JAAD pose missing %d/%d frames for video=%s ped=%s sample=%s' % (
+                        missing_count,
+                        len(frame_ids),
+                        seq.source_video_id,
+                        seq.source_ped_id,
+                        index,
+                    )
+                )
+                self.pose_missing_log_count += 1
+
+            # pose: T x J x 2, pose_conf: T x J
+            outputs['pose'] = torch.from_numpy(pose_np)
+            outputs['pose_conf'] = torch.from_numpy(pose_conf_np)
 
         return outputs
 

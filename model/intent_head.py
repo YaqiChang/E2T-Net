@@ -8,7 +8,6 @@ sequence-level or frame-level prediction variants later.
 from dataclasses import dataclass
 from typing import Dict
 
-import torch
 from torch import Tensor, nn
 
 

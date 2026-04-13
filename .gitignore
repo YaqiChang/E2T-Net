@@ -4,3 +4,4 @@ runs
 output
 checkpoints
 simple-HRNet
+__pycache__
