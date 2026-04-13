@@ -1,240 +1,212 @@
+
 # PLAN.md
 
 ## Current Stage
-Pose data integration for offline HRNet pose results
+
+Stage 3: safe model wiring
 
 ## Objective
-Integrate offline human pose NPZ files into the current E2T-Net codebase in a minimal, modular, and testable way.
 
-The immediate target is to make this path work correctly:
+Integrate the existing pose encoder into the current E2T-Net training and model path with minimal changes and strict backward compatibility.
 
-dataset -> dataloader -> model forward
+The current goal is:
 
-This stage is only for interface completion and feasibility verification.
+```text
+train path -> pose, pose_conf -> model forward -> pose_feat_seq
+````
 
----
+This stage only establishes safe data and forward-path connectivity.
+It does not redesign fusion or prediction logic.
 
-## In Scope
+## Current Status
 
-1. Inspect the repository root for HRNet-related code and use it as a reference for pose output conventions.
-2. Add robust NPZ pose loading.
-3. Integrate pose loading into dataset classes.
-4. Add pose and pose_conf to dataset outputs.
-5. Add a minimal pose encoder template.
-6. Wire pose inputs into the model interface behind config flags.
-7. Add smoke tests for one sample, one batch, and one forward pass.
+Completed:
 
----
+* Stage 0: repository audit and pose NPZ schema check
+* Stage 1: JAAD dataset-side pose integration
+* Stage 2: standalone pose encoder implementation and validation
 
-## Out of Scope
+Current repository state:
 
-1. Evidence accumulation
-2. SSM-based temporal modeling
-3. Belief-conditioned trajectory decoding
-4. New loss design
-5. Pose graph network
-6. Full pose-driven fusion redesign
-7. Performance tuning
-8. Large training infrastructure refactor
+* JAAD can return `pose` and `pose_conf` when `use_pose=True`
+* cached offline pose is available through the dataset path
+* `model/pose_encoder.py` exists
+* random input forward smoke test for `PoseSequenceEncoder` passed
+* real JAAD batch forward smoke test for `PoseSequenceEncoder` passed
+* output shape is `B x T x D`
+* no NaN
+* no Inf
+* baseline model behavior is still preserved when pose is disabled at dataset stage
 
----
+## Scope of the Current Stage
 
-## Current Repository Understanding
+In scope:
 
-The current repository already supports:
-- bbox position
-- speed
-- pedestrian attributes
-- scene attributes
-- image features
-- optical flow features
+* add pose-related runtime args to `train.py`
+* pass pose-related args into JAAD dataset construction
+* extend `PTINet` to accept optional `pose` and `pose_conf`
+* instantiate `PoseSequenceEncoder` inside the model when `use_pose=True`
+* run pose encoding inside model forward when enabled
+* preserve baseline behavior when `use_pose=False`
+* validate one-batch forward and one-step backward with pose enabled
 
-The current repository does not yet reliably support:
-- offline pose NPZ loading
-- pose confidence loading
-- pose encoder
-- pose-aware forward interface
+Out of scope:
 
----
+* fusion redesign
+* evidence accumulation
+* SSM-based temporal modeling
+* trajectory decoder changes
+* loss redesign
+* graph pose reasoning
+* PIE extension
+* online pose mode
+* large refactor
 
-## Deliverables
+## Deliverable of the Current Stage
 
-### Stage 0
-Repository and pose schema audit
+Required modified files:
 
-Files:
-- docs/pose_integration_audit.md
-- docs/pose_npz_schema.md
-- docs/pose_integration_spec.md
+* `train.py`
+* `model/network_image.py`
 
-Acceptance:
-- train entry identified
-- dataset entry identified
-- model entry identified
-- HRNet-related code location identified
-- likely NPZ schema documented
-- uncertain schema cases documented with a robust adapter strategy
+Optional helper file if needed:
 
-### Stage 1
-Dataset-side pose loading
-
-Files:
-- datasets/pose_utils.py
-- updates to dataset classes used by training
-
-Acceptance:
-- dataset returns pose
-- dataset returns pose_conf
-- missing pose files handled safely
-- one sample shape check passes
-
-### Stage 2
-Minimal pose encoder template
-
-Files:
-- models/pose_encoder.py
-
-Acceptance:
-- encoder accepts pose and pose_conf
-- encoder returns pose_feat_seq
-- one forward-pass sanity test passes
-
-### Stage 3
-Safe model wiring
-
-Files:
-- updates to model interface
-- config flags for pose integration
-
-Acceptance:
-- model forward accepts pose and pose_conf
-- baseline behavior unchanged when pose is disabled
-- one batch forward pass succeeds with pose enabled
-
----
+* `smoke_test_pose_wiring.py`
 
 ## Standard Data Contract
 
-### Dataset output
-When pose is enabled, each sample should expose:
-- pose
-- pose_conf
+Dataset-side input to model:
 
-Existing fields must remain unchanged.
+* `pose: B x T x J x 2`
+* `pose_conf: B x T x J`
 
-### Standardized tensor shapes
-- pose: B x T x J x 2
-- pose_conf: B x T x J
-- pose_feat_seq: B x T x D
+Encoder output inside model:
 
-If raw pose files use another shape, normalize them in the adapter layer.
+* `pose_feat_seq: B x T x D`
 
----
+Default for JAAD:
 
-## Expected Config Flags
+* `J = 17`
 
-Required:
-- use_pose
-- pose_dir
-- pose_format
-- use_pose_encoder
+## Stage 3 Design Constraints
 
-Optional if needed:
-- pose_missing_policy
-- pose_num_joints
-- pose_input_dim
+### Minimal Change
 
----
+Only add the smallest set of changes needed to route pose tensors from dataset to model forward.
 
-## Recommended Implementation Order
+### Backward Compatibility
 
-### Step 1
-Audit repository and infer pose file conventions
+When `use_pose=False`, training and validation behavior must remain unchanged.
 
-Tasks:
-- inspect current train path
-- inspect dataset path
-- inspect model path
-- inspect HRNet-related code in repo root
-- inspect available NPZ examples if present
+### Optional Interface
 
-### Step 2
-Implement pose adapter
+`PTINet.forward` must accept optional pose inputs without forcing pose usage in all paths.
 
-Tasks:
-- load NPZ files
-- support common candidate keys
-- normalize outputs into pose and pose_conf
-- add safe fallback for missing data
+### Local Responsibility
 
-### Step 3
-Integrate dataset outputs
+This stage only makes pose features available inside the model.
+It does not define the final multimodal fusion rule.
 
-Tasks:
-- connect pose adapter to dataset classes
-- return pose and pose_conf in __getitem__
-- keep existing outputs unchanged
+### Stable Toggle
 
-### Step 4
-Implement minimal pose encoder
+Pose support must be controlled by explicit runtime arguments rather than hard-coded behavior.
 
-Tasks:
-- center-normalize joints
-- flatten joints and confidence
-- encode per-frame pose
-- produce pose_feat_seq
+## Required Runtime Arguments
 
-### Step 5
-Wire pose into model interface
+The training entry should support:
 
-Tasks:
-- pass pose and pose_conf through train path
-- extend model forward signature
-- keep baseline path intact
-- only compute pose features when enabled
+* `--use_pose`
+* `--pose_file`
+* `--pose_format`
 
-### Step 6
-Run smoke tests
+These arguments must be propagated into dataset construction and model configuration.
 
-Tasks:
-- dataset one-sample test
-- dataloader one-batch test
-- model one-forward test
-- optional one-iteration train start test
+## Minimal Model Requirement
 
----
+The first wiring version should remain lightweight.
 
-## Smoke Test Checklist
+Required behavior:
 
-Before marking a step complete, verify:
+* import `PoseSequenceEncoder`
+* create `self.pose_encoder` only when pose is enabled
+* allow `forward` to receive `pose=None` and `pose_conf=None`
+* run `pose_feat_seq = self.pose_encoder(pose, pose_conf)` when enabled
+* keep pose features available for later integration without redesigning current decoders in this stage
 
-1. one sample can be loaded
-2. pose shape is correct
-3. pose_conf shape is correct
-4. one batch can be collated
-5. one forward pass runs
-6. baseline still runs when pose is disabled
-7. pose-enabled path does not produce NaN
-8. exact commands and results are documented
+Recommended handling for this stage:
 
----
+* compute `pose_feat_seq`
+* keep it as an internal intermediate
+* do not yet redesign the current multimodal fusion rule unless strictly needed for tensor compatibility verification
 
-## Known Risks To Keep Visible
+## Acceptance for Stage 3
 
-1. Dataset split usage must be checked before trusting ablations.
-2. Config parsing types must be checked before trusting training behavior.
-3. NPZ schema may vary across files and should not be hard-coded without inspection.
-4. Missing pose files must be handled deterministically.
+Stage 3 is done only if all of the following are satisfied:
 
----
+1. `train.py` accepts `--use_pose`, `--pose_file`, and `--pose_format`
+2. pose-related args are passed into JAAD dataset construction
+3. `PTINet.forward` accepts optional `pose` and `pose_conf`
+4. `PoseSequenceEncoder` is instantiated safely inside the model when enabled
+5. `use_pose=False` preserves original forward behavior
+6. `use_pose=True` one real JAAD batch forward succeeds
+7. `use_pose=True` one training-step backward succeeds
+8. no NaN
+9. no Inf
+10. no unrelated baseline path is broken
 
-## Definition of Done
+## Validation Checklist
 
-This stage is done only when:
+Required checks:
 
-1. pose NPZ files are loadable through the dataset pipeline
-2. pose and pose_conf appear in batch data
-3. the model forward path accepts pose inputs safely
-4. the baseline still works when pose is disabled
-5. smoke tests have been run and reported
-6. assumptions and risks have been documented
+* static syntax check
+* import check
+* one-batch forward smoke test with `use_pose=False`
+* one-batch forward smoke test with `use_pose=True`
+* one-step backward smoke test with `use_pose=True`
+
+Each report must include:
+
+* files modified
+* exact commands run
+* observed tensor shapes
+* whether NaN or Inf occurred
+* whether `use_pose=False` remained unchanged
+* remaining risks
+
+## Next Stages
+
+### Stage 4
+
+Pose branch fusion interface
+
+Goal:
+
+* define how `pose_feat_seq` interacts with existing branches
+* define clean fusion input and output interfaces
+
+### Stage 5
+
+Main pipeline integration
+
+Goal:
+
+* integrate pose as one branch of the full prediction pipeline
+
+### Stage 6
+
+Online pose mode
+
+Goal:
+
+* replace cached pose source with an online pose provider while keeping the same downstream interface
+
+## Notes
+
+Current experiments are still allowed to use cached offline pose.
+
+The final system should support online pose generation through a separate provider module.
+
+Only the provider should change between offline mode and online mode.
+
+The downstream pose encoder interface should remain unchanged.
+
