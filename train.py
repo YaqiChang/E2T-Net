@@ -186,6 +186,15 @@ def parse_args():
     parser.add_argument('--use_opticalflow', type=parse_bool_arg, default=False,
                         help='Use input emdedding as a feature',
                         required=False)
+    parser.add_argument('--use_pose', type=parse_bool_arg, default=False,
+                        help='Use cached pose as a feature',
+                        required=False)
+    parser.add_argument('--pose_file', type=str, default='',
+                        help='Path to aggregated pose npz file',
+                        required=False)
+    parser.add_argument('--pose_format', type=str, default='jaad_hrnet_npz',
+                        help='Pose file format identifier',
+                        required=False)
 
     args = parser.parse_args()
 
@@ -569,6 +578,8 @@ def train(args, train, val):
                 images = inputs['image'].to(device, non_blocking=True)
                 ped_attribute = inputs['ped_attribute'].to(device, non_blocking=True)
                 scene_attribute = inputs['scene_attribute'].to(device, non_blocking=True)
+                pose = inputs['pose'].to(device, non_blocking=True) if args.use_pose and 'pose' in inputs else None
+                pose_conf = inputs['pose_conf'].to(device, non_blocking=True) if args.use_pose and 'pose_conf' in inputs else None
                 label_c = inputs['cross_label'].to(device, non_blocking=True).long().view(-1)
 
                 net.zero_grad()
@@ -580,6 +591,8 @@ def train(args, train, val):
                     scene_attribute=scene_attribute,
                     images=images,
                     optical=optical,
+                    pose=pose,
+                    pose_conf=pose_conf,
                     average=False,
                 )
 
@@ -706,6 +719,8 @@ def train(args, train, val):
                 optical = val_in['optical'].to(device, non_blocking=True)
                 ped_behavior = val_in['ped_behavior'].to(device, non_blocking=True)
                 images = val_in['image'].to(device, non_blocking=True)
+                pose = val_in['pose'].to(device, non_blocking=True) if args.use_pose and 'pose' in val_in else None
+                pose_conf = val_in['pose_conf'].to(device, non_blocking=True) if args.use_pose and 'pose_conf' in val_in else None
                 label_c = val_in['cross_label'].to(device, non_blocking=True)
 
                 with torch.no_grad():
@@ -717,6 +732,8 @@ def train(args, train, val):
                         scene_attribute=scene_attribute,
                         images=images,
                         optical=optical,
+                        pose=pose,
+                        pose_conf=pose_conf,
                         average=True,
                     )
                     speed_loss_v = huber(speed_preds, future_speed)
@@ -984,10 +1001,9 @@ if __name__ == '__main__':
 
     os.makedirs(get_run_dir(args), exist_ok=True)
 
-    train_set = eval('datasets.' + args.dataset)(
+    dataset_kwargs = dict(
                 data_dir=args.data_dir,
                 out_dir=get_run_dir(args),
-                dtype='train',
                 input=args.input,
                 output=args.output,
                 stride=args.stride,
@@ -998,20 +1014,21 @@ if __name__ == '__main__':
                 use_attribute=args.use_attribute,
                 use_opticalflow=args.use_opticalflow
                 )
+    if args.dataset == 'jaad':
+        dataset_kwargs.update(dict(
+            use_pose=args.use_pose,
+            pose_file=args.pose_file,
+            pose_format=args.pose_format,
+        ))
+
+    train_set = eval('datasets.' + args.dataset)(
+                dtype='train',
+                **dataset_kwargs
+                )
 
     val_set = eval('datasets.' + args.dataset)(
-                data_dir=args.data_dir,
-                out_dir=get_run_dir(args),
                 dtype='val',
-                input=args.input,
-                output=args.output,
-                stride=args.stride,
-                skip=args.skip,
-                from_file=args.from_file,
-                save=args.save,
-                use_images=args.use_image,
-                use_attribute=args.use_attribute,
-                use_opticalflow=args.use_opticalflow
+                **dataset_kwargs
                 )
 
     train(args, train_set, val_set)

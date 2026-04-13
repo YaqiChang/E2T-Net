@@ -10,6 +10,8 @@ from torchvision.models import ResNet50_Weights
 from torchvision.models import ResNet18_Weights
 from model.clstm import*
 from model.vae import*
+from model.pose_encoder import PoseSequenceEncoder
+from model.pose_fusion import BranchFeatureFusion
 
 
 
@@ -40,9 +42,28 @@ class PTINet(nn.Module):
        
         self.num_layers=1
         self.latent_size=args.hidden_size
+        self.use_pose = getattr(args, 'use_pose', False)
+        self.use_fused_decoder_input = getattr(args, 'use_fused_decoder_input', False)
         
         self.speed_encoder = LSTMVAE(input_size=self.size, hidden_size=args.hidden_size, latent_size=self.latent_size, device=args.device)
         self.pos_encoder = LSTMVAE(input_size=self.size, hidden_size=args.hidden_size, latent_size=self.latent_size, device=args.device)
+        self.loc_feat_proj = nn.Linear(self.size, args.hidden_size)
+        self.debug_last_features = {}
+        if self.use_pose:
+            self.pose_encoder = PoseSequenceEncoder(num_joints=17, out_dim=args.hidden_size)
+            self.pose_fusion = BranchFeatureFusion(
+                branch_dims={
+                    'loc_feat_seq': args.hidden_size,
+                    'app_feat_seq': args.hidden_size,
+                    'pose_feat_seq': args.hidden_size,
+                },
+                out_dim=args.hidden_size,
+                use_projection=True,
+            )
+            self.fused_to_decoder = nn.Linear(args.hidden_size, args.hidden_size)
+        else:
+            self.pose_fusion = None
+            self.fused_to_decoder = None
         
 
 
@@ -93,7 +114,7 @@ class PTINet(nn.Module):
         
         self.args = args
         
-    def forward(self, speed=None, pos=None,ped_attribute=None,ped_behavior=None,scene_attribute=None,images=None,optical=None, average=False):
+    def forward(self, speed=None, pos=None,ped_attribute=None,ped_behavior=None,scene_attribute=None,images=None,optical=None, pose=None, pose_conf=None, average=False):
 
 
         # 轨迹速度、位置：
@@ -107,6 +128,27 @@ class PTINet(nn.Module):
         zpo=torch.mean(zpo,axis=1)
         # cpo = cpo.squeeze(0)
 
+        loc_feat_seq = self.loc_feat_proj(pos.float())
+        app_feat_seq = None
+
+        pose_feat_seq = None
+        fused_feat_seq = None
+        if self.use_pose:
+            if pose is None or pose_conf is None:
+                raise ValueError('pose and pose_conf must be provided when use_pose=True.')
+            pose_feat_seq = self.pose_encoder(pose, pose_conf)
+            fused_feat_seq = self.pose_fusion({
+                'loc_feat_seq': loc_feat_seq,
+                'app_feat_seq': app_feat_seq,
+                'pose_feat_seq': pose_feat_seq,
+            })
+
+        self.debug_last_features = {
+            'loc_feat_seq': loc_feat_seq.detach(),
+            'app_feat_seq': app_feat_seq.detach() if app_feat_seq is not None else None,
+            'pose_feat_seq': pose_feat_seq.detach() if pose_feat_seq is not None else None,
+            'fused_feat_seq': fused_feat_seq.detach() if fused_feat_seq is not None else None,
+        }
 
 
         if self.args.use_attribute == True:
@@ -219,6 +261,12 @@ class PTINet(nn.Module):
             hds=hds + himg_op
             zds=zds + cimg_op 
 
+        if self.use_pose and self.use_fused_decoder_input:
+            if fused_feat_seq is None:
+                raise ValueError('fused_feat_seq must be available when use_fused_decoder_input=True.')
+            fused_last_feat = fused_feat_seq[:, -1, :]
+            hds = hds + self.fused_to_decoder(fused_last_feat)
+
         for i in range(self.args.output//self.args.skip):
             hds, zds         = self.speed_decoder(in_sp, (hds, zds))
             speed_output     = self.hardtanh(self.fc_speed(hds))
@@ -249,6 +297,12 @@ class PTINet(nn.Module):
         if self.args.use_opticalflow ==True:
             hdc=hdc + himg_op
             zdc=zdc + cimg_op 
+
+        if self.use_pose and self.use_fused_decoder_input:
+            if fused_feat_seq is None:
+                raise ValueError('fused_feat_seq must be available when use_fused_decoder_input=True.')
+            fused_last_feat = fused_feat_seq[:, -1, :]
+            hdc = hdc + self.fused_to_decoder(fused_last_feat)
 
         crossing_hidden_states = []
 
