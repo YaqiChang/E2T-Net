@@ -8,6 +8,12 @@ import cv2
 import sys
 import pandas as pd
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from path_config import get_path_value, load_path_config, normalize_dataset_path
+
 
 POSE_KEYS = ["ped_ids", "ped_ptr", "video_id", "frame", "bbox", "keypoints"]
 SEQ_KEYS = [
@@ -347,11 +353,22 @@ def visualize_random_video_pose(
 
 
 def main() -> None:
+    pre_parser = argparse.ArgumentParser(add_help=False)
+    pre_parser.add_argument("--config", default="preprocess/config/default.yaml")
+    pre_args, _ = pre_parser.parse_known_args()
+    config = load_path_config(pre_args.config)
+
     parser = argparse.ArgumentParser(description="Inspect JAAD pose and sequence NPZ files.")
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=pre_args.config,
+        help="Path to preprocess config YAML.",
+    )
     parser.add_argument(
         "--root",
         type=str,
-        default="/media/meta/File/datasets/Intention/JAAD_dataset/PN_ego",
+        default=get_path_value("JAAD_pn_root", "", config=config),
         help="JAAD PN_ego root directory.",
     )
     parser.add_argument(
@@ -390,8 +407,8 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    root = Path(args.root)
-    image_root = Path(args.image_root) if args.image_root else None
+    root = Path(normalize_dataset_path(args.root, config=config))
+    image_root = Path(normalize_dataset_path(args.image_root, config=config)) if args.image_root else None
     report_path = Path(args.report)
     if not report_path.is_absolute():
         report_path = root / report_path

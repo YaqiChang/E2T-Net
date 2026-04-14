@@ -189,6 +189,9 @@ def parse_args():
     parser.add_argument('--use_pose', type=parse_bool_arg, default=False,
                         help='Use cached pose as a feature',
                         required=False)
+    parser.add_argument('--use_fused_decoder_input', type=parse_bool_arg, default=False,
+                        help='Inject fused_feat_seq into decoder initial hidden state',
+                        required=False)
     parser.add_argument('--pose_file', type=str, default='',
                         help='Path to aggregated pose npz file',
                         required=False)

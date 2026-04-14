@@ -8,6 +8,12 @@ import pandas as pd
 import numpy as np
 import sys
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from path_config import get_path_value, load_path_config, normalize_dataset_path
+
 
 def pose_is_valid(pose: np.ndarray) -> bool:
     if pose is None:
@@ -85,7 +91,7 @@ def load_ped_group(csv_path: Path, ped_id: str) -> pd.DataFrame:
 
 
 def resolve_image_path(row: pd.Series) -> Path:
-    folder = Path(row["imagefolderpath"])
+    folder = Path(normalize_dataset_path(str(row["imagefolderpath"])))
     filename = str(row["filename"])
     if folder.suffix.lower() in {".png", ".jpg", ".jpeg"}:
         return folder
@@ -213,11 +219,22 @@ def draw_pose(image: np.ndarray, pose: np.ndarray, skeleton) -> None:
 
 
 def main() -> None:
+    pre_parser = argparse.ArgumentParser(add_help=False)
+    pre_parser.add_argument("--config", default="preprocess/config/default.yaml")
+    pre_args, _ = pre_parser.parse_known_args()
+    config = load_path_config(pre_args.config)
+
     parser = argparse.ArgumentParser(description="Inspect JAAD crossing label changes.")
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=pre_args.config,
+        help="Path to preprocess config YAML.",
+    )
     parser.add_argument(
         "--root",
         type=str,
-        default="/media/meta/File/datasets/Intention/JAAD_dataset/PN_ego",
+        default=get_path_value("JAAD_pn_root", "", config=config),
         help="PN_ego root with train/val/test CSVs.",
     )
     parser.add_argument(
@@ -241,7 +258,7 @@ def main() -> None:
     parser.add_argument(
         "--pose_npz",
         type=str,
-        default="/media/meta/File/datasets/Intention/JAAD_dataset/PN_ego/jaad_pose_annotations_fixed.npz",
+        default=get_path_value("JAAD_pose_npz_fixed", "", config=config),
         help="Pose npz path.",
     )
     parser.add_argument(
@@ -253,12 +270,12 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    root = Path(args.root)
+    root = Path(normalize_dataset_path(args.root, config=config))
     out_path = Path(args.output)
     if not out_path.is_absolute():
         out_path = root / out_path
 
-    pose_index, joints = load_pose_index(Path(args.pose_npz))
+    pose_index, joints = load_pose_index(Path(normalize_dataset_path(args.pose_npz, config=config)))
     skeleton = load_skeleton(joints)
 
     targets = find_video_changes(root, pose_index, args.max_groups)

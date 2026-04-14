@@ -1,7 +1,9 @@
-README.md
+*.md
 __pycache__
 RAFT
 runs
 output
 checkpoints
 simple-HRNet
+.codex
+.vscode

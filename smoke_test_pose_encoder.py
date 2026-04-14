@@ -5,11 +5,12 @@ from torch.utils.data import DataLoader
 
 from datasets.jaad import JAAD
 from model.pose_encoder import PoseSequenceEncoder
+from path_config import get_path_value
 
 
 def main():
-    data_root = '/media/cyq/Data/dataset/Intention/JAAD_dataset/PN_ego'
-    pose_file = str(Path(data_root) / 'jaad_pose_annotations_fixed.npz')
+    data_root = get_path_value('JAAD_pn_root', '/media/cyq/Data/dataset/Intention/JAAD_dataset/PN_ego')
+    pose_file = get_path_value('JAAD_pose_npz_fixed', str(Path(data_root) / 'jaad_pose_annotations_fixed.npz'))
     cache_root = '/tmp/e2t_stage2_pose_encoder'
     Path(cache_root).mkdir(parents=True, exist_ok=True)
 

@@ -3,9 +3,9 @@ use_argument_parser: False
 # dataset: 'titan'
 # out_dir: '/home/farzeen/work/aa_postdoc/intent/PTINet/PTINet/output/'
 # data_dir: '/home/farzeen/work/aa_postdoc/intent/JAAD/PN/'
-data_dir: '/media/meta/File/datasets/Intention/JAAD_dataset/PN_ego'
+data_dir: '/media/cyq/Data/dataset/Intention/JAAD_dataset/PN_ego'
 dataset: 'jaad'
-out_dir: '/media/meta/Data/CYQ/TIP/E2T-Net/output'
+out_dir: '/media/cyq/Data/project/PIP/E2T-Net/output'
 
 
 input: 5 # help='Input sequence length in frames',

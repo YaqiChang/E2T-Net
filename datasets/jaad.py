@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from torchvision import transforms
 
 from datasets.pose_utils import JAADPoseNPZAdapter
+from path_config import load_path_config, normalize_dataset_path, normalize_path_sequence
 
 try:
     from tqdm.auto import tqdm
@@ -22,6 +23,18 @@ except ImportError:
 
 
 class JAAD(torch.utils.data.Dataset):
+    def _normalize_dataset_path(self, value):
+        return normalize_dataset_path(value, config=self.path_config)
+
+    def _normalize_path_sequence(self, value):
+        return normalize_path_sequence(value, config=self.path_config)
+
+    def _normalize_path_columns(self, df):
+        for column in ['imagefolderpath', 'file']:
+            if column in df.columns:
+                df.loc[:, column] = df.loc[:, column].apply(self._normalize_path_sequence)
+        return df
+
     def _load_cached_sequences(self, cache_path):
         sequence_centric = pd.read_csv(cache_path)
         df = sequence_centric.copy()
@@ -32,6 +45,7 @@ class JAAD(torch.utils.data.Dataset):
             except:
                 continue
         sequence_centric[df.columns] = df[df.columns]
+        sequence_centric = self._normalize_path_columns(sequence_centric)
         return sequence_centric
 
     def _resolve_id_column(self, df):
@@ -80,7 +94,10 @@ class JAAD(torch.utils.data.Dataset):
 
     def _resolve_pose_file(self, pose_file):
         if pose_file:
-            return pose_file
+            return self._normalize_dataset_path(pose_file)
+        configured_pose_file = self.path_config.get('JAAD_pose_npz_fixed', '')
+        if configured_pose_file:
+            return self._normalize_dataset_path(configured_pose_file)
         return os.path.join(self.data_dir, 'jaad_pose_annotations_fixed.npz')
 
     def _validate_pose_metadata(self):
@@ -115,7 +132,8 @@ class JAAD(torch.utils.data.Dataset):
         print('*' * 30)
         print('Loading JAAD', dtype, 'data ...')
 
-        self.data_dir = data_dir
+        self.path_config = load_path_config()
+        self.data_dir = self._normalize_dataset_path(data_dir)
         self.out_dir = out_dir
         self.input = input
         self.output = output
@@ -148,10 +166,10 @@ class JAAD(torch.utils.data.Dataset):
             print('Reading data files ...')
             df = pd.DataFrame()
             new_index = 0
-            files = sorted(glob.glob(os.path.join(data_dir, dtype, '*')))
+            files = sorted(glob.glob(os.path.join(self.data_dir, dtype, '*')))
             if not files:
                 raise FileNotFoundError(
-                    f'No JAAD csv files found under {os.path.join(data_dir, dtype)}. '
+                    f'No JAAD csv files found under {os.path.join(self.data_dir, dtype)}. '
                     f'If you already built cached sequences, set out_dir to the folder containing {self.filename}.'
                 )
             for file in self._progress_iter(files, desc='Reading CSVs', total=len(files)):
@@ -159,6 +177,9 @@ class JAAD(torch.utils.data.Dataset):
                 if not temp.empty:
                     id_col = self._resolve_id_column(temp)
                     temp['file'] = [file for _ in range(temp.shape[0])]
+                    temp['file'] = temp['file'].apply(self._normalize_dataset_path)
+                    if 'imagefolderpath' in temp.columns:
+                        temp['imagefolderpath'] = temp['imagefolderpath'].apply(self._normalize_dataset_path)
                     temp['source_ped_id'] = temp[id_col].astype(str)
                     temp['source_video_id'] = os.path.splitext(os.path.basename(file))[0]
 
@@ -269,7 +290,7 @@ class JAAD(torch.utils.data.Dataset):
 
             sequence_centric = data.copy()
 
-        self.data = sequence_centric.copy().reset_index(drop=True)
+        self.data = self._normalize_path_columns(sequence_centric.copy()).reset_index(drop=True)
 
         if self.use_pose:
             self._validate_pose_metadata()
