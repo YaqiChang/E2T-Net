@@ -506,7 +506,7 @@ if __name__ == '__main__':
     #                             str(args.output), str(args.stride)) 
     # if not os.path.isdir(os.path.join(args.out_dir, args.log_name)):
     #     os.mkdir(os.path.join(args.out_dir, args.log_name))
-
+# TEST MES
     # select dataset
     if args.dataset == 'jaad':
         args.is_3D = False
