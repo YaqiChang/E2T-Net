@@ -1,9 +1,11 @@
 *.md
 __pycache__
-RAFT
-runs
-output
-checkpoints
-simple-HRNet
+/RAFT/
+/runs/
+/output/
+/checkpoints/
+/simple-HRNet/
+/yolo/
 .codex
-.vscode
+.vscode/output/
+/RAFT/
