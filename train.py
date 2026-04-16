@@ -7,6 +7,7 @@ from ast import literal_eval
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 import torch.distributed as dist
 from torch.utils.data.distributed import DistributedSampler
@@ -45,7 +46,98 @@ def parse_bool_arg(value):
 def finalize_model_args(args):
     if getattr(args, 'belief_dim', 0) <= 0:
         args.belief_dim = int(args.hidden_size)
+    args.crossing_loss_type = str(getattr(args, 'crossing_loss_type', 'ce')).lower()
+    if args.crossing_loss_type not in {'ce', 'focal'}:
+        raise ValueError(
+            f'Unsupported crossing_loss_type={args.crossing_loss_type!r}. Expected ce or focal.'
+        )
     return args
+
+
+def build_binary_class_weight(pos_weight, device):
+    return torch.tensor([1.0, float(pos_weight)], dtype=torch.float32, device=device)
+
+
+def build_focal_alpha_tensor(focal_alpha, pos_weight, device):
+    if float(focal_alpha) < 0:
+        neg_weight = 1.0
+        pos_weight = max(float(pos_weight), 1e-6)
+        normalizer = neg_weight + pos_weight
+        return torch.tensor(
+            [neg_weight / normalizer, pos_weight / normalizer],
+            dtype=torch.float32,
+            device=device,
+        )
+
+    focal_alpha = float(focal_alpha)
+    if focal_alpha < 0.0 or focal_alpha > 1.0:
+        raise ValueError('focal_alpha must be in [0, 1] when explicitly set.')
+    return torch.tensor(
+        [1.0 - focal_alpha, focal_alpha],
+        dtype=torch.float32,
+        device=device,
+    )
+
+
+def binary_focal_loss(logits, targets, gamma=2.0, alpha=None, label_smoothing=0.0):
+    ce_loss = F.cross_entropy(
+        logits,
+        targets,
+        reduction='none',
+        label_smoothing=label_smoothing,
+    )
+    probs = torch.softmax(logits, dim=1)
+    pt = probs.gather(1, targets.unsqueeze(1)).squeeze(1).clamp_min(1e-8)
+    loss = (1.0 - pt).pow(float(gamma)) * ce_loss
+    if alpha is not None:
+        alpha_t = alpha[targets]
+        loss = alpha_t * loss
+    return loss.mean()
+
+
+def resolve_class_weights(args, train_dataset, device):
+    if args.auto_class_weights:
+        inferred_crossing, inferred_intent = infer_dataset_class_weights(
+            train_dataset,
+            args.max_class_weight,
+        )
+        if inferred_crossing is not None:
+            args.crossing_pos_weight = float(inferred_crossing)
+        if inferred_intent is not None:
+            args.intent_pos_weight = float(inferred_intent)
+
+    crossing_class_weight = build_binary_class_weight(args.crossing_pos_weight, device)
+    intent_class_weight = build_binary_class_weight(args.intent_pos_weight, device)
+    return crossing_class_weight, intent_class_weight
+
+
+def compute_crossing_loss(
+    crossing_preds,
+    future_cross,
+    crossing_loss_type,
+    crossing_ce,
+    crossing_focal_alpha,
+    focal_gamma,
+    label_smoothing,
+):
+    crossing_loss = 0.0
+    for i in range(future_cross.shape[1]):
+        target_cross = torch.argmax(future_cross[:, i], dim=1)
+        if crossing_loss_type == 'ce':
+            crossing_loss = crossing_loss + crossing_ce(crossing_preds[:, i], target_cross)
+        elif crossing_loss_type == 'focal':
+            crossing_loss = crossing_loss + binary_focal_loss(
+                crossing_preds[:, i],
+                target_cross,
+                gamma=focal_gamma,
+                alpha=crossing_focal_alpha,
+                label_smoothing=label_smoothing,
+            )
+        else:
+            raise ValueError(
+                f'Unsupported crossing_loss_type={crossing_loss_type!r}. Expected ce or focal.'
+            )
+    return crossing_loss / future_cross.shape[1]
 
 
 METRIC_COLUMNS = [
@@ -169,7 +261,7 @@ def parse_args():
     parser.add_argument('--best_metric_ade_weight', type=float, default=0.01)
     parser.add_argument('--weight_decay', type=float, default=1e-4)
     parser.add_argument('--grad_clip_norm', type=float, default=5.0)
-    parser.add_argument('--label_smoothing', type=float, default=0.05)
+    parser.add_argument('--label_smoothing', type=float, default=0.0)
     parser.add_argument('--use_plateau_scheduler', type=parse_bool_arg, default=True)
     parser.add_argument('--plateau_factor', type=float, default=0.5)
     parser.add_argument('--plateau_patience', type=int, default=4)
@@ -203,6 +295,15 @@ def parse_args():
                         required=False)
     parser.add_argument('--belief_readout', type=str, default='last',
                         help='Belief sequence readout mode for the model',
+                        required=False)
+    parser.add_argument('--crossing_loss_type', type=str, default='ce',
+                        help='Crossing loss type: ce or focal',
+                        required=False)
+    parser.add_argument('--focal_gamma', type=float, default=2.0,
+                        help='Focal loss gamma for crossing head',
+                        required=False)
+    parser.add_argument('--focal_alpha', type=float, default=-1.0,
+                        help='Positive-class alpha for focal crossing loss; < 0 derives from crossing_pos_weight',
                         required=False)
     parser.add_argument('--use_fused_decoder_input', type=parse_bool_arg, default=False,
                         help='Inject fused_feat_seq into decoder initial hidden state',
@@ -375,7 +476,7 @@ def safe_positive_class_weight(positive_count, total_count, max_weight):
     if positive_count <= 0:
         return float(max_weight)
     negative_count = max(total_count - positive_count, 1.0)
-    return float(min(max_weight, max(1.0, negative_count / positive_count)))
+    return float(min(max_weight, max(1e-6, negative_count / positive_count)))
 
 
 def parse_sequence_values(value):
@@ -459,9 +560,6 @@ def train(args, train, val):
         torch.backends.cudnn.enabled = True
         torch.backends.cudnn.benchmark = True
     args.device = str(device)
-    args.crossing_pos_weight = 1.0
-    args.intent_pos_weight = 1.0
-    args.auto_class_weights = False
 
     verbose = dist.get_rank() == 0 if use_distributed else True
     run_dir = get_run_dir(args)
@@ -508,9 +606,22 @@ def train(args, train, val):
         shuffle=args.loader_shuffle if train_sampler is None else False,
     )
 
+    crossing_class_weight, intent_class_weight = resolve_class_weights(args, train, device)
+    crossing_focal_alpha = build_focal_alpha_tensor(
+        args.focal_alpha,
+        args.crossing_pos_weight,
+        device,
+    )
+
     huber = nn.HuberLoss(delta=1.0)
-    crossing_ce = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
-    intent_ce = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
+    crossing_ce = nn.CrossEntropyLoss(
+        weight=crossing_class_weight,
+        label_smoothing=args.label_smoothing,
+    )
+    intent_ce = nn.CrossEntropyLoss(
+        weight=intent_class_weight,
+        label_smoothing=args.label_smoothing,
+    )
     data = []
     best_selection_score = float('-inf')
     epochs_without_improvement = 0
@@ -523,8 +634,15 @@ def train(args, train, val):
         print('Learning rate: ' + str(args.lr))
         print('Number of epochs: ' + str(args.n_epochs))
         print('Hidden layer size: ' + str(args.hidden_size))
-        print('Crossing loss class weight: 1.0000')
-        print('Intent loss class weight: 1.0000')
+        print('Crossing loss type: ' + str(args.crossing_loss_type))
+        print('Crossing loss class weight: ' + str(crossing_class_weight.detach().cpu().tolist()))
+        print('Intent loss class weight: ' + str(intent_class_weight.detach().cpu().tolist()))
+        print('Auto class weights enabled: ' + str(args.auto_class_weights))
+        print('Crossing positive class weight: %.4f' % args.crossing_pos_weight)
+        print('Intent positive class weight: %.4f' % args.intent_pos_weight)
+        if args.crossing_loss_type == 'focal':
+            print('Focal gamma: %.4f' % args.focal_gamma)
+            print('Focal alpha: ' + str(crossing_focal_alpha.detach().cpu().tolist()))
         print('VAE loss weight: %.6f' % args.vae_loss_weight)
         print('Weight decay: %.6f' % args.weight_decay)
         print('Gradient clip norm: %.2f' % args.grad_clip_norm)
@@ -615,13 +733,15 @@ def train(args, train, val):
                 )
 
                 speed_loss = huber(speed_preds, future_speed)
-
-                crossing_loss = 0
-                for i in range(future_cross.shape[1]):
-                    target_cross = torch.argmax(future_cross[:, i], dim=1)
-                    crossing_loss += crossing_ce(crossing_preds[:, i], target_cross)
-
-                crossing_loss /= future_cross.shape[1]
+                crossing_loss = compute_crossing_loss(
+                    crossing_preds,
+                    future_cross,
+                    args.crossing_loss_type,
+                    crossing_ce,
+                    crossing_focal_alpha,
+                    args.focal_gamma,
+                    args.label_smoothing,
+                )
                 intention_loss = intent_ce(intention_logits, label_c)
                 weighted_mloss = args.vae_loss_weight * mloss
                 loss = speed_loss + crossing_loss + args.intention_loss_weight * intention_loss + weighted_mloss
@@ -755,12 +875,15 @@ def train(args, train, val):
                         average=True,
                     )
                     speed_loss_v = huber(speed_preds, future_speed)
-
-                    crossing_loss_v = 0
-                    for i in range(future_cross.shape[1]):
-                        target_cross = torch.argmax(future_cross[:, i], dim=1)
-                        crossing_loss_v += crossing_ce(crossing_preds[:, i], target_cross)
-                    crossing_loss_v /= future_cross.shape[1]
+                    crossing_loss_v = compute_crossing_loss(
+                        crossing_preds,
+                        future_cross,
+                        args.crossing_loss_type,
+                        crossing_ce,
+                        crossing_focal_alpha,
+                        args.focal_gamma,
+                        args.label_smoothing,
+                    )
                     intention_loss_v = intent_ce(intention_logits, label_c.long().view(-1))
 
                     avg_epoch_val_s_loss += float(speed_loss_v)
