@@ -52,21 +52,29 @@ class PTINet(nn.Module):
        
         self.num_layers=1
         self.latent_size=args.hidden_size
+        self.belief_dim = int(getattr(args, 'belief_dim', args.hidden_size))
+        if self.belief_dim <= 0:
+            self.belief_dim = int(args.hidden_size)
         self.use_pose = getattr(args, 'use_pose', False)
         self.use_decision_accumulator = getattr(args, 'use_decision_accumulator', False)
+        self.belief_readout = str(getattr(args, 'belief_readout', 'last')).lower()
         self.use_fused_decoder_input = getattr(args, 'use_fused_decoder_input', False)
+        if self.belief_readout not in {'last', 'mean'}:
+            raise ValueError(
+                f'Unsupported belief_readout={self.belief_readout!r}. Expected one of: last, mean.'
+            )
         
         self.speed_encoder = LSTMVAE(input_size=self.size, hidden_size=args.hidden_size, latent_size=self.latent_size, device=args.device)
         self.pos_encoder = LSTMVAE(input_size=self.size, hidden_size=args.hidden_size, latent_size=self.latent_size, device=args.device)
         self.loc_feat_proj = nn.Linear(self.size, args.hidden_size)
         self.debug_last_features = {}
         if self.use_pose:
-            self.pose_encoder = PoseEvidenceEncoder(num_joints=17, out_dim=args.hidden_size)
-            self.pose_direct_to_crossing = nn.Linear(args.hidden_size, args.hidden_size)
-            self.fc_intention_pose_direct = nn.Linear(args.hidden_size, 2)
-            self.pose_accumulator = LeakyDecisionAccumulator(feature_dim=args.hidden_size)
-            self.belief_to_crossing = nn.Linear(args.hidden_size, args.hidden_size)
-            self.fc_intention_belief = nn.Linear(args.hidden_size, 2)
+            self.pose_encoder = PoseEvidenceEncoder(num_joints=17, out_dim=self.belief_dim)
+            self.pose_direct_to_crossing = nn.Linear(self.belief_dim, args.hidden_size)
+            self.fc_intention_pose_direct = nn.Linear(self.belief_dim, 2)
+            self.pose_accumulator = LeakyDecisionAccumulator(feature_dim=self.belief_dim)
+            self.belief_to_crossing = nn.Linear(self.belief_dim, args.hidden_size)
+            self.fc_intention_belief = nn.Linear(self.belief_dim, 2)
         else:
             self.pose_encoder = None
             self.pose_direct_to_crossing = None
@@ -123,6 +131,15 @@ class PTINet(nn.Module):
         self.hardtanh = nn.Hardtanh(min_val=-1*args.hardtanh_limit, max_val=args.hardtanh_limit)
         
         self.args = args
+
+    def _sequence_readout(self, sequence_feat, name):
+        if sequence_feat is None:
+            return None
+        if sequence_feat.ndim != 3:
+            raise ValueError(f'{name} must have shape B x T x D, got {tuple(sequence_feat.shape)}.')
+        if self.belief_readout == 'last':
+            return sequence_feat[:, -1, :]
+        return sequence_feat.mean(dim=1)
         
     def forward(self, speed=None, pos=None,ped_attribute=None,ped_behavior=None,scene_attribute=None,images=None,optical=None, pose=None, pose_conf=None, average=False):
 
@@ -143,21 +160,27 @@ class PTINet(nn.Module):
 
         pose_evidence_seq = None
         pose_evidence_last = None
+        pose_evidence_readout = None
         belief_seq = None
         belief_last = None
+        belief_readout = None
         if self.use_pose:
             if pose is None or pose_conf is None:
                 raise ValueError('pose and pose_conf must be provided when use_pose=True.')
             pose_evidence_seq = self.pose_encoder(pose, pose_conf)
             pose_evidence_last = pose_evidence_seq[:, -1, :]
+            pose_evidence_readout = self._sequence_readout(pose_evidence_seq, 'pose_evidence_seq')
             _check_finite_tensor(pose_evidence_seq, 'pose_evidence_seq')
             _check_finite_tensor(pose_evidence_last, 'pose_evidence_last')
+            _check_finite_tensor(pose_evidence_readout, 'pose_evidence_readout')
 
             if self.use_decision_accumulator:
                 belief_seq = self.pose_accumulator(pose_evidence_seq)
                 belief_last = belief_seq[:, -1, :]
+                belief_readout = self._sequence_readout(belief_seq, 'belief_seq')
                 _check_finite_tensor(belief_seq, 'belief_seq')
                 _check_finite_tensor(belief_last, 'belief_last')
+                _check_finite_tensor(belief_readout, 'belief_readout')
 
         self.debug_last_features = {
             'loc_feat_seq': loc_feat_seq.detach(),
@@ -165,8 +188,10 @@ class PTINet(nn.Module):
             'pose_feat_seq': pose_evidence_seq.detach() if pose_evidence_seq is not None else None,
             'pose_evidence_seq': pose_evidence_seq.detach() if pose_evidence_seq is not None else None,
             'pose_evidence_last': pose_evidence_last.detach() if pose_evidence_last is not None else None,
+            'pose_evidence_readout': pose_evidence_readout.detach() if pose_evidence_readout is not None else None,
             'belief_seq': belief_seq.detach() if belief_seq is not None else None,
             'belief_last': belief_last.detach() if belief_last is not None else None,
+            'belief_readout': belief_readout.detach() if belief_readout is not None else None,
             'fused_feat_seq': None,
         }
 
@@ -312,10 +337,10 @@ class PTINet(nn.Module):
             hdc=hdc + himg_op
             zdc=zdc + cimg_op 
 
-        if belief_last is not None:
-            hdc = hdc + self.belief_to_crossing(belief_last)
-        elif pose_evidence_last is not None:
-            hdc = hdc + self.pose_direct_to_crossing(pose_evidence_last)
+        if belief_readout is not None:
+            hdc = hdc + self.belief_to_crossing(belief_readout)
+        elif pose_evidence_readout is not None:
+            hdc = hdc + self.pose_direct_to_crossing(pose_evidence_readout)
 
         crossing_hidden_states = []
 
@@ -328,10 +353,10 @@ class PTINet(nn.Module):
 
         intention_context = torch.cat(crossing_hidden_states, dim=1).max(dim=1)[0]
         _check_finite_tensor(crossing_outputs, 'crossing_outputs')
-        if belief_last is not None:
-            intention_logits = self.fc_intention_belief(belief_last)
-        elif pose_evidence_last is not None:
-            intention_logits = self.fc_intention_pose_direct(pose_evidence_last)
+        if belief_readout is not None:
+            intention_logits = self.fc_intention_belief(belief_readout)
+        elif pose_evidence_readout is not None:
+            intention_logits = self.fc_intention_pose_direct(pose_evidence_readout)
         else:
             intention_logits = self.fc_intention(intention_context)
         _check_finite_tensor(intention_logits, 'intention_logits')
@@ -348,10 +373,12 @@ class PTINet(nn.Module):
         return tuple(outputs)
 
 
-def _build_smoke_args(use_pose, use_decision_accumulator):
+def _build_smoke_args(use_pose, use_decision_accumulator, belief_dim=128, belief_readout='last'):
     return SimpleNamespace(
         dataset='jaad',
         hidden_size=128,
+        belief_dim=belief_dim,
+        belief_readout=belief_readout,
         device=torch.device('cpu'),
         use_pose=use_pose,
         use_decision_accumulator=use_decision_accumulator,
@@ -409,7 +436,12 @@ def _smoke_test():
     _check_finite_tensor(baseline_crossing, 'baseline_crossing')
     _check_finite_tensor(baseline_intention, 'baseline_intention')
 
-    direct_args = _build_smoke_args(use_pose=True, use_decision_accumulator=False)
+    direct_args = _build_smoke_args(
+        use_pose=True,
+        use_decision_accumulator=False,
+        belief_dim=64,
+        belief_readout='last',
+    )
     direct_model = PTINet(direct_args)
     direct_model.eval()
     direct_inputs = _build_smoke_inputs()
@@ -439,10 +471,10 @@ def _smoke_test():
     assert direct_intention.shape == (2, 2), (
         f'unexpected direct intention shape: {tuple(direct_intention.shape)}'
     )
-    assert direct_pose_evidence_seq.shape == (2, 5, 128), (
+    assert direct_pose_evidence_seq.shape == (2, 5, 64), (
         f'unexpected direct pose_evidence_seq shape: {tuple(direct_pose_evidence_seq.shape)}'
     )
-    assert direct_pose_evidence_last.shape == (2, 128), (
+    assert direct_pose_evidence_last.shape == (2, 64), (
         f'unexpected direct pose_evidence_last shape: {tuple(direct_pose_evidence_last.shape)}'
     )
     assert direct_belief_seq is None, 'direct belief_seq should be None.'
@@ -452,54 +484,70 @@ def _smoke_test():
     _check_finite_tensor(direct_pose_evidence_seq, 'direct_pose_evidence_seq')
     _check_finite_tensor(direct_pose_evidence_last, 'direct_pose_evidence_last')
 
-    accumulator_args = _build_smoke_args(use_pose=True, use_decision_accumulator=True)
-    accumulator_model = PTINet(accumulator_args)
-    accumulator_model.eval()
-    accumulator_inputs = _build_smoke_inputs()
-
-    with torch.no_grad():
-        accumulator_outputs = accumulator_model(
-            speed=accumulator_inputs['speed'],
-            pos=accumulator_inputs['pos'],
-            ped_attribute=accumulator_inputs['ped_attribute'],
-            ped_behavior=accumulator_inputs['ped_behavior'],
-            scene_attribute=accumulator_inputs['scene_attribute'],
-            images=accumulator_inputs['images'],
-            pose=accumulator_inputs['pose'],
-            pose_conf=accumulator_inputs['pose_conf'],
+    accumulator_results = {}
+    for readout_mode in ('last', 'mean'):
+        accumulator_args = _build_smoke_args(
+            use_pose=True,
+            use_decision_accumulator=True,
+            belief_dim=64,
+            belief_readout=readout_mode,
         )
+        accumulator_model = PTINet(accumulator_args)
+        accumulator_model.eval()
+        accumulator_inputs = _build_smoke_inputs()
 
-    accumulator_crossing = accumulator_outputs[2]
-    accumulator_intention = accumulator_outputs[3]
-    accumulator_pose_evidence_seq = accumulator_model.debug_last_features['pose_evidence_seq']
-    accumulator_pose_evidence_last = accumulator_model.debug_last_features['pose_evidence_last']
-    accumulator_belief_seq = accumulator_model.debug_last_features['belief_seq']
-    accumulator_belief_last = accumulator_model.debug_last_features['belief_last']
+        with torch.no_grad():
+            accumulator_outputs = accumulator_model(
+                speed=accumulator_inputs['speed'],
+                pos=accumulator_inputs['pos'],
+                ped_attribute=accumulator_inputs['ped_attribute'],
+                ped_behavior=accumulator_inputs['ped_behavior'],
+                scene_attribute=accumulator_inputs['scene_attribute'],
+                images=accumulator_inputs['images'],
+                pose=accumulator_inputs['pose'],
+                pose_conf=accumulator_inputs['pose_conf'],
+            )
 
-    assert accumulator_crossing.shape == (2, 4, 2), (
-        f'unexpected accumulator crossing shape: {tuple(accumulator_crossing.shape)}'
-    )
-    assert accumulator_intention.shape == (2, 2), (
-        f'unexpected accumulator intention shape: {tuple(accumulator_intention.shape)}'
-    )
-    assert accumulator_pose_evidence_seq.shape == (2, 5, 128), (
-        f'unexpected accumulator pose_evidence_seq shape: {tuple(accumulator_pose_evidence_seq.shape)}'
-    )
-    assert accumulator_pose_evidence_last.shape == (2, 128), (
-        f'unexpected accumulator pose_evidence_last shape: {tuple(accumulator_pose_evidence_last.shape)}'
-    )
-    assert accumulator_belief_seq.shape == (2, 5, 128), (
-        f'unexpected accumulator belief_seq shape: {tuple(accumulator_belief_seq.shape)}'
-    )
-    assert accumulator_belief_last.shape == (2, 128), (
-        f'unexpected accumulator belief_last shape: {tuple(accumulator_belief_last.shape)}'
-    )
-    _check_finite_tensor(accumulator_crossing, 'accumulator_crossing')
-    _check_finite_tensor(accumulator_intention, 'accumulator_intention')
-    _check_finite_tensor(accumulator_pose_evidence_seq, 'accumulator_pose_evidence_seq')
-    _check_finite_tensor(accumulator_pose_evidence_last, 'accumulator_pose_evidence_last')
-    _check_finite_tensor(accumulator_belief_seq, 'accumulator_belief_seq')
-    _check_finite_tensor(accumulator_belief_last, 'accumulator_belief_last')
+        accumulator_crossing = accumulator_outputs[2]
+        accumulator_intention = accumulator_outputs[3]
+        accumulator_pose_evidence_seq = accumulator_model.debug_last_features['pose_evidence_seq']
+        accumulator_pose_evidence_last = accumulator_model.debug_last_features['pose_evidence_last']
+        accumulator_belief_seq = accumulator_model.debug_last_features['belief_seq']
+        accumulator_belief_last = accumulator_model.debug_last_features['belief_last']
+
+        assert accumulator_crossing.shape == (2, 4, 2), (
+            f'unexpected accumulator[{readout_mode}] crossing shape: {tuple(accumulator_crossing.shape)}'
+        )
+        assert accumulator_intention.shape == (2, 2), (
+            f'unexpected accumulator[{readout_mode}] intention shape: {tuple(accumulator_intention.shape)}'
+        )
+        assert accumulator_pose_evidence_seq.shape == (2, 5, 64), (
+            f'unexpected accumulator[{readout_mode}] pose_evidence_seq shape: {tuple(accumulator_pose_evidence_seq.shape)}'
+        )
+        assert accumulator_pose_evidence_last.shape == (2, 64), (
+            f'unexpected accumulator[{readout_mode}] pose_evidence_last shape: {tuple(accumulator_pose_evidence_last.shape)}'
+        )
+        assert accumulator_belief_seq.shape == (2, 5, 64), (
+            f'unexpected accumulator[{readout_mode}] belief_seq shape: {tuple(accumulator_belief_seq.shape)}'
+        )
+        assert accumulator_belief_last.shape == (2, 64), (
+            f'unexpected accumulator[{readout_mode}] belief_last shape: {tuple(accumulator_belief_last.shape)}'
+        )
+        _check_finite_tensor(accumulator_crossing, f'accumulator_{readout_mode}_crossing')
+        _check_finite_tensor(accumulator_intention, f'accumulator_{readout_mode}_intention')
+        _check_finite_tensor(accumulator_pose_evidence_seq, f'accumulator_{readout_mode}_pose_evidence_seq')
+        _check_finite_tensor(accumulator_pose_evidence_last, f'accumulator_{readout_mode}_pose_evidence_last')
+        _check_finite_tensor(accumulator_belief_seq, f'accumulator_{readout_mode}_belief_seq')
+        _check_finite_tensor(accumulator_belief_last, f'accumulator_{readout_mode}_belief_last')
+
+        accumulator_results[readout_mode] = {
+            'crossing': accumulator_crossing,
+            'intention': accumulator_intention,
+            'pose_evidence_seq': accumulator_pose_evidence_seq,
+            'pose_evidence_last': accumulator_pose_evidence_last,
+            'belief_seq': accumulator_belief_seq,
+            'belief_last': accumulator_belief_last,
+        }
 
     has_nan = bool(
         torch.isnan(baseline_crossing).any()
@@ -508,12 +556,7 @@ def _smoke_test():
         or torch.isnan(direct_intention).any()
         or torch.isnan(direct_pose_evidence_seq).any()
         or torch.isnan(direct_pose_evidence_last).any()
-        or torch.isnan(accumulator_crossing).any()
-        or torch.isnan(accumulator_intention).any()
-        or torch.isnan(accumulator_pose_evidence_seq).any()
-        or torch.isnan(accumulator_pose_evidence_last).any()
-        or torch.isnan(accumulator_belief_seq).any()
-        or torch.isnan(accumulator_belief_last).any()
+        or any(torch.isnan(value).any() for result in accumulator_results.values() for value in result.values())
     )
     has_inf = bool(
         torch.isinf(baseline_crossing).any()
@@ -522,12 +565,7 @@ def _smoke_test():
         or torch.isinf(direct_intention).any()
         or torch.isinf(direct_pose_evidence_seq).any()
         or torch.isinf(direct_pose_evidence_last).any()
-        or torch.isinf(accumulator_crossing).any()
-        or torch.isinf(accumulator_intention).any()
-        or torch.isinf(accumulator_pose_evidence_seq).any()
-        or torch.isinf(accumulator_pose_evidence_last).any()
-        or torch.isinf(accumulator_belief_seq).any()
-        or torch.isinf(accumulator_belief_last).any()
+        or any(torch.isinf(value).any() for result in accumulator_results.values() for value in result.values())
     )
 
     print(f'baseline crossing shape: {tuple(baseline_crossing.shape)}')
@@ -538,12 +576,13 @@ def _smoke_test():
     print(f'direct pose_evidence_last shape: {tuple(direct_pose_evidence_last.shape)}')
     print(f'direct belief_seq: {direct_belief_seq}')
     print(f'direct belief_last: {direct_belief_last}')
-    print(f'accumulator crossing shape: {tuple(accumulator_crossing.shape)}')
-    print(f'accumulator intention shape: {tuple(accumulator_intention.shape)}')
-    print(f'accumulator pose_evidence_seq shape: {tuple(accumulator_pose_evidence_seq.shape)}')
-    print(f'accumulator pose_evidence_last shape: {tuple(accumulator_pose_evidence_last.shape)}')
-    print(f'accumulator belief_seq shape: {tuple(accumulator_belief_seq.shape)}')
-    print(f'accumulator belief_last shape: {tuple(accumulator_belief_last.shape)}')
+    for readout_mode, result in accumulator_results.items():
+        print(f'accumulator[{readout_mode}] crossing shape: {tuple(result["crossing"].shape)}')
+        print(f'accumulator[{readout_mode}] intention shape: {tuple(result["intention"].shape)}')
+        print(f'accumulator[{readout_mode}] pose_evidence_seq shape: {tuple(result["pose_evidence_seq"].shape)}')
+        print(f'accumulator[{readout_mode}] pose_evidence_last shape: {tuple(result["pose_evidence_last"].shape)}')
+        print(f'accumulator[{readout_mode}] belief_seq shape: {tuple(result["belief_seq"].shape)}')
+        print(f'accumulator[{readout_mode}] belief_last shape: {tuple(result["belief_last"].shape)}')
     print(f'has_nan: {has_nan}')
     print(f'has_inf: {has_inf}')
 
