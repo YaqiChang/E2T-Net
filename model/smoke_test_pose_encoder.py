@@ -14,7 +14,7 @@ def parse_args():
         "--data_dir",
         type=str,
         required=True,
-        help="JAAD dataset root, e.g. /media/cyq/Data/dataset/Intention/JAAD_dataset/PN_ego",
+        help="JAAD dataset root, e.g. /media/meta/File/datasets/Intention/JAAD_dataset/PN_ego",
     )
     parser.add_argument(
         "--out_dir",

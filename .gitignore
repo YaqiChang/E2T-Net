@@ -1,4 +1,5 @@
 *.md
+*.pyc
 __pycache__
 /RAFT/
 /runs/
@@ -9,3 +10,4 @@ __pycache__
 .codex
 .vscode/output/
 /RAFT/
+/__pycache__/

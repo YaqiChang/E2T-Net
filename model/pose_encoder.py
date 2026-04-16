@@ -2,15 +2,15 @@ import torch
 import torch.nn as nn
 
 
-class PoseSequenceEncoder(nn.Module):
-    """Standalone Stage-2 pose sequence encoder.
+class PoseEvidenceEncoder(nn.Module):
+    """Encode per-frame pose evidence without temporal accumulation.
 
     Input:
     - pose: B x T x J x 2
     - pose_conf: B x T x J
 
     Output:
-    - pose_feat_seq: B x T x D
+    - pose_evidence_seq: B x T x D
     """
 
     def __init__(
@@ -24,48 +24,48 @@ class PoseSequenceEncoder(nn.Module):
     ):
         super().__init__()
 
-        self.num_joints = num_joints
-        self.frame_hidden_dim = frame_hidden_dim
-        self.temporal_hidden_dim = temporal_hidden_dim
-        self.out_dim = out_dim
-        self.conf_power = conf_power
-        self.eps = eps
+        self.num_joints = int(num_joints)
+        self.frame_hidden_dim = int(frame_hidden_dim)
+        # Kept only to avoid breaking existing config construction paths.
+        self.temporal_hidden_dim = int(temporal_hidden_dim)
+        self.out_dim = int(out_dim)
+        self.conf_power = float(conf_power)
+        self.eps = float(eps)
 
         # Per-frame feature:
         # normalized coordinates -> J * 2
         # first-order motion     -> J * 2
         # confidence             -> J
-        frame_input_dim = num_joints * 5
+        frame_input_dim = self.num_joints * 5
 
         self.frame_mlp = nn.Sequential(
-            nn.Linear(frame_input_dim, frame_hidden_dim),
+            nn.Linear(frame_input_dim, self.frame_hidden_dim),
             nn.ReLU(inplace=True),
-            nn.Linear(frame_hidden_dim, frame_hidden_dim),
+            nn.Linear(self.frame_hidden_dim, self.out_dim),
             nn.ReLU(inplace=True),
         )
-
-        self.temporal_encoder = nn.LSTM(
-            input_size=frame_hidden_dim,
-            hidden_size=temporal_hidden_dim,
-            num_layers=1,
-            batch_first=True,
-        )
-
-        self.output_proj = nn.Linear(temporal_hidden_dim, out_dim)
 
     def forward(self, pose, pose_conf):
         self._check_inputs(pose, pose_conf)
 
         pose = pose.float()
         pose_conf = pose_conf.float()
+        self._check_finite(pose, 'pose')
+        self._check_finite(pose_conf, 'pose_conf')
 
         pose_norm = self._body_center_normalize(pose, pose_conf)
+        self._check_finite(pose_norm, 'pose_norm')
 
         conf = torch.clamp(pose_conf, min=0.0, max=1.0).pow(self.conf_power)
-        conf_expanded = conf.unsqueeze(-1)
+        self._check_finite(conf, 'conf')
 
+        # pose_norm / pose_weighted / pose_velocity all follow B x T x J x 2.
+        conf_expanded = conf.unsqueeze(-1)
         pose_weighted = pose_norm * conf_expanded
+        self._check_finite(pose_weighted, 'pose_weighted')
+
         pose_velocity = self._first_order_difference(pose_weighted)
+        self._check_finite(pose_velocity, 'pose_velocity')
 
         frame_feat = torch.cat(
             [
@@ -75,17 +75,12 @@ class PoseSequenceEncoder(nn.Module):
             ],
             dim=-1,
         )
+        self._check_finite(frame_feat, 'frame_feat')
 
-        frame_feat = self.frame_mlp(frame_feat)
-        temporal_feat, _ = self.temporal_encoder(frame_feat)
-        pose_feat_seq = self.output_proj(temporal_feat)
+        pose_evidence_seq = self.frame_mlp(frame_feat)
+        self._check_finite(pose_evidence_seq, 'pose_evidence_seq')
 
-        if torch.isnan(pose_feat_seq).any():
-            raise ValueError('pose_feat_seq contains NaN values.')
-        if torch.isinf(pose_feat_seq).any():
-            raise ValueError('pose_feat_seq contains Inf values.')
-
-        return pose_feat_seq
+        return pose_evidence_seq
 
     def _check_inputs(self, pose, pose_conf):
         if not isinstance(pose, torch.Tensor):
@@ -117,6 +112,12 @@ class PoseSequenceEncoder(nn.Module):
                 f'pose={tuple(pose.shape)}, pose_conf={tuple(pose_conf.shape)}.'
             )
 
+    def _check_finite(self, tensor, name):
+        if torch.isnan(tensor).any():
+            raise ValueError(f'{name} contains NaN values.')
+        if torch.isinf(tensor).any():
+            raise ValueError(f'{name} contains Inf values.')
+
     def _body_center_normalize(self, pose, pose_conf):
         # COCO-17 indexing used by JAAD HRNet export.
         left_shoulder = 5
@@ -147,3 +148,31 @@ class PoseSequenceEncoder(nn.Module):
         motion = torch.zeros_like(pose_feat)
         motion[:, 1:] = pose_feat[:, 1:] - pose_feat[:, :-1]
         return motion
+
+
+PoseSequenceEncoder = PoseEvidenceEncoder
+
+
+def _smoke_test():
+    torch.manual_seed(0)
+
+    model = PoseEvidenceEncoder(num_joints=17, frame_hidden_dim=128, out_dim=128)
+    pose = torch.randn(2, 5, 17, 2)
+    pose_conf = torch.rand(2, 5, 17)
+
+    with torch.no_grad():
+        pose_evidence_seq = model(pose, pose_conf)
+
+    assert pose_evidence_seq.shape == (2, 5, 128), (
+        f'unexpected pose_evidence_seq shape: {tuple(pose_evidence_seq.shape)}'
+    )
+    assert not torch.isnan(pose_evidence_seq).any(), 'pose_evidence_seq contains NaN.'
+    assert not torch.isinf(pose_evidence_seq).any(), 'pose_evidence_seq contains Inf.'
+
+    print(f'pose_evidence_seq shape: {tuple(pose_evidence_seq.shape)}')
+    print(f'has_nan: {bool(torch.isnan(pose_evidence_seq).any())}')
+    print(f'has_inf: {bool(torch.isinf(pose_evidence_seq).any())}')
+
+
+if __name__ == '__main__':
+    _smoke_test()

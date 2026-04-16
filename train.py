@@ -42,6 +42,12 @@ def parse_bool_arg(value):
     raise argparse.ArgumentTypeError(f'Invalid boolean value: {value}')
 
 
+def finalize_model_args(args):
+    if getattr(args, 'belief_dim', 0) <= 0:
+        args.belief_dim = int(args.hidden_size)
+    return args
+
+
 METRIC_COLUMNS = [
     'epoch',
     'train_loss_s',
@@ -189,6 +195,15 @@ def parse_args():
     parser.add_argument('--use_pose', type=parse_bool_arg, default=False,
                         help='Use cached pose as a feature',
                         required=False)
+    parser.add_argument('--use_decision_accumulator', type=parse_bool_arg, default=False,
+                        help='Enable pose evidence to belief accumulation in the model',
+                        required=False)
+    parser.add_argument('--belief_dim', type=int, default=0,
+                        help='Belief state feature dimension; <= 0 falls back to hidden_size',
+                        required=False)
+    parser.add_argument('--belief_readout', type=str, default='last',
+                        help='Belief sequence readout mode for the model',
+                        required=False)
     parser.add_argument('--use_fused_decoder_input', type=parse_bool_arg, default=False,
                         help='Inject fused_feat_seq into decoder initial hidden state',
                         required=False)
@@ -201,7 +216,7 @@ def parse_args():
 
     args = parser.parse_args()
 
-    return args
+    return finalize_model_args(args)
 
 
 def create_progress(iterable, desc, total, verbose):
@@ -1000,6 +1015,7 @@ if __name__ == '__main__':
         for arg in vars(args):
             if arg in config:
                 setattr(args, arg, config[arg])
+    args = finalize_model_args(args)
     print(args)
 
     os.makedirs(get_run_dir(args), exist_ok=True)

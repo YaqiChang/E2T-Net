@@ -1,18 +1,18 @@
 dataset: JAAD
 data_root: data
-dataset_path_prefix: /media/cyq/Data/dataset
+dataset_path_prefix: /media/meta/File/datasets/Intention
 legacy_dataset_path_prefixes:
-  - /media/meta/File/datasets
-JAAD_root: /media/cyq/Data/dataset/Intention/JAAD_dataset
-JAAD_pn_root: /media/cyq/Data/dataset/Intention/JAAD_dataset/PN_ego
-JAAD_raw_root: /media/cyq/Data/dataset/Intention/JAAD_dataset/JAAD_clips/raw
-JAAD_preproc_root: /media/cyq/Data/dataset/Intention/JAAD_dataset/JAAD_clips/frames
-JAAD_pose_npz_raw: /media/cyq/Data/dataset/Intention/JAAD_dataset/PN_ego/jaad_pose_annotations.npz
-JAAD_pose_npz_fixed: /media/cyq/Data/dataset/Intention/JAAD_dataset/PN_ego/jaad_pose_annotations_fixed.npz
-PIE_root: /media/cyq/Data/dataset/Intention/PIE_dataset
-PIE_raw_root: /media/cyq/Data/dataset/Intention/PIE_dataset/clips/raw
-PIE_preproc_root: /media/cyq/Data/dataset/Intention/PIE_dataset/clips/frames
-PIE_pose_root: /media/cyq/Data/dataset/Intention/PIE_dataset/PN_pose
+  - /media/cyq/Data/dataset/Intention
+JAAD_root: /media/meta/File/datasets/Intention/JAAD_dataset
+JAAD_pn_root: /media/meta/File/datasets/Intention/JAAD_dataset/PN_ego
+JAAD_raw_root: /media/meta/File/datasets/Intention/JAAD_dataset/JAAD_clips/raw
+JAAD_preproc_root: /media/meta/File/datasets/Intention/JAAD_dataset/JAAD_clips/frames
+JAAD_pose_npz_raw: /media/meta/File/datasets/Intention/JAAD_dataset/PN_ego/jaad_pose_annotations.npz
+JAAD_pose_npz_fixed: /media/meta/File/datasets/Intention/JAAD_dataset/PN_ego/jaad_pose_annotations_fixed.npz
+PIE_root: /media/meta/File/datasets/Intention/PIE_dataset
+PIE_raw_root: /media/meta/File/datasets/Intention/PIE_dataset/clips/raw
+PIE_preproc_root: /media/meta/File/datasets/Intention/PIE_dataset/clips/frames
+PIE_pose_root: /media/meta/File/datasets/Intention/PIE_dataset/PN_pose
 PIE_pose_npz: pie_pose_annotations.npz
 hrnet_checkpoint: simple-HRNet/pose_hrnet_w48_384x288.pth
 hrnet_c: 48

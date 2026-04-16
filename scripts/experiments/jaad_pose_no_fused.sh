@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PYTHON_BIN="/home/cyq/anaconda3/envs/py38/bin/python"
-REPO_ROOT="/media/cyq/Data/project/PIP/E2T-Net"
+PYTHON_BIN="/home/meta/anaconda3/envs/3dhuman/bin/python"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${REPO_ROOT}"
 DATASET_ROOT="$("${PYTHON_BIN}" - <<'PY'
 from path_config import get_path_value
-print(get_path_value('JAAD_pn_root', '/media/cyq/Data/dataset/Intention/JAAD_dataset/PN_ego'))
+print(get_path_value('JAAD_pn_root', '/media/meta/File/datasets/Intention/JAAD_dataset/PN_ego'))
 PY
 )"
 POSE_FILE="$("${PYTHON_BIN}" - <<'PY'
 from path_config import get_path_value
-print(get_path_value('JAAD_pose_npz_fixed', '/media/cyq/Data/dataset/Intention/JAAD_dataset/PN_ego/jaad_pose_annotations_fixed.npz'))
+print(get_path_value('JAAD_pose_npz_fixed', '/media/meta/File/datasets/Intention/JAAD_dataset/PN_ego/jaad_pose_annotations_fixed.npz'))
 PY
 )"
 OUTPUT_ROOT="${REPO_ROOT}/output/stage5_ablation"
