@@ -1,32 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Stop rules:
+# 1) 参数或命名不符预期时立即停
+# 2) baseline 失败不继续
+# 3) pose_direct_last 失败不继续 pose_accumulator
+
 PYTHON_BIN="${PYTHON_BIN:-/home/meta/anaconda3/envs/3dhuman/bin/python}"
 GPU_ID="${GPU_ID:-0}"
-DATA_DIR="${DATA_DIR:-/media/meta/File/datasets/Intention/JAAD_dataset/PN_ego}"
-DATASET="${DATASET:-jaad}"
-OUT_DIR="${OUT_DIR:-/media/meta/Data/CYQ/TIP/E2T-Net/output}"
-BATCH_SIZE="${BATCH_SIZE:-256}"
-LOADER_WORKERS="${LOADER_WORKERS:-4}"
-PIN_MEMORY="${PIN_MEMORY:-True}"
-PREFETCH_FACTOR="${PREFETCH_FACTOR:-2}"
-LOADER_SHUFFLE="${LOADER_SHUFFLE:-True}"
-LABEL_SMOOTHING="${LABEL_SMOOTHING:-0.0}"
-AUTO_CLASS_WEIGHTS="${AUTO_CLASS_WEIGHTS:-False}"
-CROSSING_LOSS_TYPE="${CROSSING_LOSS_TYPE:-ce}"
 export CUDA_VISIBLE_DEVICES="${GPU_ID}"
 
-DATE_PREFIX="$(date +%Y%m%d)"
-COMMON_ARGS=(
-  --loader_workers "${LOADER_WORKERS}"
-  --pin_memory "${PIN_MEMORY}"
-  --prefetch_factor "${PREFETCH_FACTOR}"
-  --loader_shuffle "${LOADER_SHUFFLE}"
-  --auto_class_weights "${AUTO_CLASS_WEIGHTS}"
-  --intent_pos_weight 1.0
-  --crossing_loss_type "${CROSSING_LOSS_TYPE}"
-  --label_smoothing "${LABEL_SMOOTHING}"
-)
+DATE_PREFIX="$(date +%m%d)"
 
 run_exp() {
   local log_name="$1"
@@ -37,26 +21,10 @@ run_exp() {
   echo "Start time: $(date '+%Y-%m-%d %H:%M:%S')"
   echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
   echo "PYTHON_BIN=${PYTHON_BIN}"
-  echo "DATA_DIR=${DATA_DIR}"
-  echo "DATASET=${DATASET}"
-  echo "OUT_DIR=${OUT_DIR}"
-  echo "BATCH_SIZE=${BATCH_SIZE}"
-  echo "LOADER_WORKERS=${LOADER_WORKERS}"
-  echo "PIN_MEMORY=${PIN_MEMORY}"
-  echo "PREFETCH_FACTOR=${PREFETCH_FACTOR}"
-  echo "LOADER_SHUFFLE=${LOADER_SHUFFLE}"
-  echo "LABEL_SMOOTHING=${LABEL_SMOOTHING}"
-  echo "AUTO_CLASS_WEIGHTS=${AUTO_CLASS_WEIGHTS}"
-  echo "CROSSING_LOSS_TYPE=${CROSSING_LOSS_TYPE}"
   echo "============================================================"
 
   "${PYTHON_BIN}" train.py \
-    --data_dir "${DATA_DIR}" \
-    --dataset "${DATASET}" \
-    --out_dir "${OUT_DIR}" \
     --log_name "${log_name}" \
-    --batch_size "${BATCH_SIZE}" \
-    "${COMMON_ARGS[@]}" \
     "$@"
 
   echo "Finished experiment: ${log_name}"
@@ -77,23 +45,20 @@ PY
   echo
 }
 
-# 1. baseline
 run_exp \
-  "${DATE_PREFIX}_jaad_baseline_wce" \
+  "${DATE_PREFIX}_baseline" \
   --use_pose False \
   --use_decision_accumulator False
 
-# 2. pose_direct_last
 run_exp \
-  "${DATE_PREFIX}_jaad_pose_direct_last_wce_b64_last" \
+  "${DATE_PREFIX}_pose_direct_last" \
   --use_pose True \
   --use_decision_accumulator False \
   --belief_dim 64 \
   --belief_readout last
 
-# 3. pose_accumulator
 run_exp \
-  "${DATE_PREFIX}_jaad_pose_accumulator_wce_b64_last" \
+  "${DATE_PREFIX}_pose_accumulator" \
   --use_pose True \
   --use_decision_accumulator True \
   --belief_dim 64 \

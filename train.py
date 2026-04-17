@@ -177,7 +177,11 @@ METRIC_COLUMNS = [
 def parse_config_file(file_path):
     with open(file_path, 'r') as file:
         config = yaml.safe_load(file)
-    return config
+    return config or {}
+
+
+def config_default(config, key, fallback):
+    return config.get(key, fallback)
 
 
 def should_use_distributed():
@@ -201,117 +205,118 @@ def resolve_runtime_device(device_arg, local_rank=0):
 
 
 def parse_args():
+    config = parse_config_file(os.path.join(os.path.dirname(__file__), 'config.yml'))
     parser = argparse.ArgumentParser(description='Train PTINet network')
 
     parser.add_argument('--data_dir', type=str,
-                        default='/home/farzeen/work/aa_postdoc/intent/JAAD/PN/',
+                        default=config_default(config, 'data_dir', '/home/farzeen/work/aa_postdoc/intent/JAAD/PN/'),
                         required=False)
     parser.add_argument('--dataset', type=str,
-                        default='pie',
+                        default=config_default(config, 'dataset', 'pie'),
                         required=False)
     parser.add_argument('--out_dir', type=str,
-                        default='/home/farzeen/work/aa_postdoc/intent/PIE_bbox_image/bounding-box-prediction/output',
+                        default=config_default(config, 'out_dir', '/home/farzeen/work/aa_postdoc/intent/PIE_bbox_image/bounding-box-prediction/output'),
                         required=False)
 
     parser.add_argument('--input', type=int,
-                        default=16,
+                        default=config_default(config, 'input', 16),
                         required=False)
     parser.add_argument('--output', type=int,
-                        default=32,
+                        default=config_default(config, 'output', 32),
                         required=False)
     parser.add_argument('--stride', type=int,
-                        default=16,
+                        default=config_default(config, 'stride', 16),
                         required=False)
-    parser.add_argument('--skip', type=int, default=1)
+    parser.add_argument('--skip', type=int, default=config_default(config, 'skip', 1))
 
-    parser.add_argument('--dtype', type=str, default='train')
-    parser.add_argument("--from_file", type=parse_bool_arg, default=False)
-    parser.add_argument('--save', type=parse_bool_arg, default=True)
-    parser.add_argument('--log_name', type=str, default='')
-    parser.add_argument('--loader_workers', type=int, default=16)
-    parser.add_argument('--loader_shuffle', type=parse_bool_arg, default=True)
-    parser.add_argument('--pin_memory', type=parse_bool_arg, default=False)
-    parser.add_argument('--prefetch_factor', type=int, default=3)
+    parser.add_argument('--dtype', type=str, default=config_default(config, 'dtype', 'train'))
+    parser.add_argument("--from_file", type=parse_bool_arg, default=config_default(config, 'from_file', False))
+    parser.add_argument('--save', type=parse_bool_arg, default=config_default(config, 'save', True))
+    parser.add_argument('--log_name', type=str, default=config_default(config, 'log_name', ''))
+    parser.add_argument('--loader_workers', type=int, default=config_default(config, 'loader_workers', 16))
+    parser.add_argument('--loader_shuffle', type=parse_bool_arg, default=config_default(config, 'loader_shuffle', True))
+    parser.add_argument('--pin_memory', type=parse_bool_arg, default=config_default(config, 'pin_memory', False))
+    parser.add_argument('--prefetch_factor', type=int, default=config_default(config, 'prefetch_factor', 3))
 
-    parser.add_argument('--device', type=str, default='cuda')
-    parser.add_argument('--batch_size', type=int, default=4)
-    parser.add_argument('--n_epochs', type=int, default=100)
-    parser.add_argument('--lr', type=int, default=1e-5)
-    parser.add_argument('--lr_scheduler', type=parse_bool_arg, default=False)
+    parser.add_argument('--device', type=str, default=config_default(config, 'device', 'cuda'))
+    parser.add_argument('--batch_size', type=int, default=config_default(config, 'batch_size', 4))
+    parser.add_argument('--n_epochs', type=int, default=config_default(config, 'n_epochs', 100))
+    parser.add_argument('--lr', type=float, default=config_default(config, 'lr', 1e-5))
+    parser.add_argument('--lr_scheduler', type=parse_bool_arg, default=config_default(config, 'lr_scheduler', False))
     parser.add_argument('--local-rank', type=int, default=0)
-    parser.add_argument('--crossing_pos_weight', type=float, default=1.0)
-    parser.add_argument('--intent_pos_weight', type=float, default=1.0)
-    parser.add_argument('--intention_loss_weight', type=float, default=1.0)
-    parser.add_argument('--vae_loss_weight', type=float, default=1e-5)
-    parser.add_argument('--auto_class_weights', type=parse_bool_arg, default=False)
-    parser.add_argument('--max_class_weight', type=float, default=1.0)
-    parser.add_argument('--use_balanced_sampler', type=parse_bool_arg, default=True)
-    parser.add_argument('--sampler_target_pos_rate', type=float, default=0.3)
-    parser.add_argument('--threshold_metric', type=str, default='f0.5')
-    parser.add_argument('--abort_on_collapse', type=parse_bool_arg, default=True)
-    parser.add_argument('--collapse_patience_epochs', type=int, default=10)
-    parser.add_argument('--collapse_min_state_f1', type=float, default=0.05)
-    parser.add_argument('--collapse_min_intent_f1', type=float, default=0.05)
-    parser.add_argument('--collapse_max_state_recall', type=float, default=0.01)
-    parser.add_argument('--collapse_max_intent_recall', type=float, default=0.01)
-    parser.add_argument('--best_metric_f1_weight', type=float, default=2.0)
-    parser.add_argument('--best_metric_recall_weight', type=float, default=1.0)
-    parser.add_argument('--best_metric_precision_weight', type=float, default=0.25)
-    parser.add_argument('--best_metric_bal_acc_weight', type=float, default=0.5)
-    parser.add_argument('--best_metric_ade_weight', type=float, default=0.01)
-    parser.add_argument('--weight_decay', type=float, default=1e-4)
-    parser.add_argument('--grad_clip_norm', type=float, default=5.0)
-    parser.add_argument('--label_smoothing', type=float, default=0.0)
-    parser.add_argument('--use_plateau_scheduler', type=parse_bool_arg, default=True)
-    parser.add_argument('--plateau_factor', type=float, default=0.5)
-    parser.add_argument('--plateau_patience', type=int, default=4)
-    parser.add_argument('--plateau_min_lr', type=float, default=1e-6)
-    parser.add_argument('--use_early_stopping', type=parse_bool_arg, default=True)
-    parser.add_argument('--early_stopping_patience', type=int, default=12)
-    parser.add_argument('--early_stopping_min_delta', type=float, default=1e-4)
+    parser.add_argument('--crossing_pos_weight', type=float, default=config_default(config, 'crossing_pos_weight', 1.0))
+    parser.add_argument('--intent_pos_weight', type=float, default=config_default(config, 'intent_pos_weight', 1.0))
+    parser.add_argument('--intention_loss_weight', type=float, default=config_default(config, 'intention_loss_weight', 1.0))
+    parser.add_argument('--vae_loss_weight', type=float, default=config_default(config, 'vae_loss_weight', 1e-5))
+    parser.add_argument('--auto_class_weights', type=parse_bool_arg, default=config_default(config, 'auto_class_weights', False))
+    parser.add_argument('--max_class_weight', type=float, default=config_default(config, 'max_class_weight', 1.0))
+    parser.add_argument('--use_balanced_sampler', type=parse_bool_arg, default=config_default(config, 'use_balanced_sampler', True))
+    parser.add_argument('--sampler_target_pos_rate', type=float, default=config_default(config, 'sampler_target_pos_rate', 0.3))
+    parser.add_argument('--threshold_metric', type=str, default=config_default(config, 'threshold_metric', 'f0.5'))
+    parser.add_argument('--abort_on_collapse', type=parse_bool_arg, default=config_default(config, 'abort_on_collapse', True))
+    parser.add_argument('--collapse_patience_epochs', type=int, default=config_default(config, 'collapse_patience_epochs', 10))
+    parser.add_argument('--collapse_min_state_f1', type=float, default=config_default(config, 'collapse_min_state_f1', 0.05))
+    parser.add_argument('--collapse_min_intent_f1', type=float, default=config_default(config, 'collapse_min_intent_f1', 0.05))
+    parser.add_argument('--collapse_max_state_recall', type=float, default=config_default(config, 'collapse_max_state_recall', 0.01))
+    parser.add_argument('--collapse_max_intent_recall', type=float, default=config_default(config, 'collapse_max_intent_recall', 0.01))
+    parser.add_argument('--best_metric_f1_weight', type=float, default=config_default(config, 'best_metric_f1_weight', 2.0))
+    parser.add_argument('--best_metric_recall_weight', type=float, default=config_default(config, 'best_metric_recall_weight', 1.0))
+    parser.add_argument('--best_metric_precision_weight', type=float, default=config_default(config, 'best_metric_precision_weight', 0.25))
+    parser.add_argument('--best_metric_bal_acc_weight', type=float, default=config_default(config, 'best_metric_bal_acc_weight', 0.5))
+    parser.add_argument('--best_metric_ade_weight', type=float, default=config_default(config, 'best_metric_ade_weight', 0.01))
+    parser.add_argument('--weight_decay', type=float, default=config_default(config, 'weight_decay', 1e-4))
+    parser.add_argument('--grad_clip_norm', type=float, default=config_default(config, 'grad_clip_norm', 5.0))
+    parser.add_argument('--label_smoothing', type=float, default=config_default(config, 'label_smoothing', 0.0))
+    parser.add_argument('--use_plateau_scheduler', type=parse_bool_arg, default=config_default(config, 'use_plateau_scheduler', True))
+    parser.add_argument('--plateau_factor', type=float, default=config_default(config, 'plateau_factor', 0.5))
+    parser.add_argument('--plateau_patience', type=int, default=config_default(config, 'plateau_patience', 4))
+    parser.add_argument('--plateau_min_lr', type=float, default=config_default(config, 'plateau_min_lr', 1e-6))
+    parser.add_argument('--use_early_stopping', type=parse_bool_arg, default=config_default(config, 'use_early_stopping', True))
+    parser.add_argument('--early_stopping_patience', type=int, default=config_default(config, 'early_stopping_patience', 12))
+    parser.add_argument('--early_stopping_min_delta', type=float, default=config_default(config, 'early_stopping_min_delta', 1e-4))
 
-    parser.add_argument('--hidden_size', type=int, default=512)
-    parser.add_argument('--hardtanh_limit', type=int, default=100)
-    parser.add_argument('--use_image', type=parse_bool_arg, default=False,
+    parser.add_argument('--hidden_size', type=int, default=config_default(config, 'hidden_size', 512))
+    parser.add_argument('--hardtanh_limit', type=int, default=config_default(config, 'hardtanh_limit', 100))
+    parser.add_argument('--use_image', type=parse_bool_arg, default=config_default(config, 'use_image', False),
                         help='Use input image as a feature',
                         required=False)
-    parser.add_argument('--image_network', type=str, default='resnet50',
+    parser.add_argument('--image_network', type=str, default=config_default(config, 'image_network', 'resnet50'),
                         help='select backbone',
                         required=False)
-    parser.add_argument('--use_attribute', type=parse_bool_arg, default=True,
+    parser.add_argument('--use_attribute', type=parse_bool_arg, default=config_default(config, 'use_attribute', True),
                         help='Use input attribute as a feature',
                         required=False)
-    parser.add_argument('--use_opticalflow', type=parse_bool_arg, default=False,
+    parser.add_argument('--use_opticalflow', type=parse_bool_arg, default=config_default(config, 'use_opticalflow', False),
                         help='Use input emdedding as a feature',
                         required=False)
-    parser.add_argument('--use_pose', type=parse_bool_arg, default=False,
+    parser.add_argument('--use_pose', type=parse_bool_arg, default=config_default(config, 'use_pose', False),
                         help='Use cached pose as a feature',
                         required=False)
-    parser.add_argument('--use_decision_accumulator', type=parse_bool_arg, default=False,
+    parser.add_argument('--use_decision_accumulator', type=parse_bool_arg, default=config_default(config, 'use_decision_accumulator', False),
                         help='Enable pose evidence to belief accumulation in the model',
                         required=False)
-    parser.add_argument('--belief_dim', type=int, default=0,
+    parser.add_argument('--belief_dim', type=int, default=config_default(config, 'belief_dim', 0),
                         help='Belief state feature dimension; <= 0 falls back to hidden_size',
                         required=False)
-    parser.add_argument('--belief_readout', type=str, default='last',
+    parser.add_argument('--belief_readout', type=str, default=config_default(config, 'belief_readout', 'last'),
                         help='Belief sequence readout mode for the model',
                         required=False)
-    parser.add_argument('--crossing_loss_type', type=str, default='ce',
+    parser.add_argument('--crossing_loss_type', type=str, default=config_default(config, 'crossing_loss_type', 'ce'),
                         help='Crossing loss type: ce or focal',
                         required=False)
-    parser.add_argument('--focal_gamma', type=float, default=2.0,
+    parser.add_argument('--focal_gamma', type=float, default=config_default(config, 'focal_gamma', 2.0),
                         help='Focal loss gamma for crossing head',
                         required=False)
-    parser.add_argument('--focal_alpha', type=float, default=-1.0,
+    parser.add_argument('--focal_alpha', type=float, default=config_default(config, 'focal_alpha', -1.0),
                         help='Positive-class alpha for focal crossing loss; < 0 derives from crossing_pos_weight',
                         required=False)
-    parser.add_argument('--use_fused_decoder_input', type=parse_bool_arg, default=False,
+    parser.add_argument('--use_fused_decoder_input', type=parse_bool_arg, default=config_default(config, 'use_fused_decoder_input', False),
                         help='Inject fused_feat_seq into decoder initial hidden state',
                         required=False)
-    parser.add_argument('--pose_file', type=str, default='',
+    parser.add_argument('--pose_file', type=str, default=config_default(config, 'pose_file', ''),
                         help='Path to aggregated pose npz file',
                         required=False)
-    parser.add_argument('--pose_format', type=str, default='jaad_hrnet_npz',
+    parser.add_argument('--pose_format', type=str, default=config_default(config, 'pose_format', 'jaad_hrnet_npz'),
                         help='Pose file format identifier',
                         required=False)
 
@@ -600,10 +605,11 @@ def train(args, train, val):
         train,
         batch_size=args.batch_size,
         pin_memory=args.pin_memory,
-        num_workers=0,
+        num_workers=args.loader_workers,
         drop_last=True,
         sampler=train_sampler,
         shuffle=args.loader_shuffle if train_sampler is None else False,
+        prefetch_factor=args.prefetch_factor if args.loader_workers > 0 else None,
     )
 
     crossing_class_weight, intent_class_weight = resolve_class_weights(args, train, device)
@@ -822,10 +828,11 @@ def train(args, train, val):
                 val,
                 batch_size=args.batch_size,
                 pin_memory=args.pin_memory,
-                num_workers=0,
+                num_workers=args.loader_workers,
                 drop_last=True,
                 sampler=val_sampler,
                 shuffle=False,
+                prefetch_factor=args.prefetch_factor if args.loader_workers > 0 else None,
             )
 
             counter = 0
@@ -1133,12 +1140,6 @@ if __name__ == '__main__':
     print("Date and time:", datetime.datetime.now())
 
     args = parse_args()
-    config = parse_config_file(os.path.join(os.path.dirname(__file__), 'config.yml'))
-    if config.get('use_argument_parser') == False:
-        for arg in vars(args):
-            if arg in config:
-                setattr(args, arg, config[arg])
-    args = finalize_model_args(args)
     print(args)
 
     os.makedirs(get_run_dir(args), exist_ok=True)
