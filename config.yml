@@ -1,4 +1,4 @@
-use_argument_parser: False
+use_argument_parser: True
 # data_dir: '/media/farzeen/sam/sam/titan_data/dataset/PN/'
 # dataset: 'titan'
 # out_dir: '/home/farzeen/work/aa_postdoc/intent/PTINet/PTINet/output/'
@@ -23,7 +23,7 @@ prefetch_factor: 10
     # training
 gpu: 0
 device: 'cuda'
-batch_size: 1 # 100
+batch_size: 4 # conservative default; suite script sets its own batch size explicitly
 n_epochs: 100
 lr: 0.001 #1e-5lse
 lr_scheduler: False

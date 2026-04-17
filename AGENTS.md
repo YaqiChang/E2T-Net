@@ -174,4 +174,4 @@ Before any workaround for missing imports, report:
 - torchvision import result
 - cv2 import result
 Use this interpreter for every Python command:
-/home/cyq/anaconda3/envs/py38/bin/python
+/home/meta/anaconda3/envs/3dhuman/bin/python
